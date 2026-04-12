@@ -1,5 +1,12 @@
 # Easy PDF Tool Kit
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
+![PySide6](<https://img.shields.io/badge/UI-PySide6%20(Qt%206)-41CD52>)
+![PyMuPDF](https://img.shields.io/badge/PDF-PyMuPDF-orange)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-6f42c1)
+![Status](https://img.shields.io/badge/Status-Active%20Development-0a7ea4)
+
 A desktop-first, fully offline PDF toolkit built with Python and PySide6. View, navigate, and edit PDF documents without uploading files to any server or cloud service.
 
 > **Status:** Active development — advanced reader experience is ready; editing and annotation features are in progress.
