@@ -1,0 +1,20 @@
+QMainWindow {
+    background: #1c1f26;
+    color: #f5f7ff;
+}
+QToolBar {
+    background: #262b35;
+    border-bottom: 1px solid #3c4455;
+    spacing: 8px;
+    padding: 4px;
+}
+QListWidget, QTabWidget::pane, QTextEdit {
+    background: #1f2430;
+    color: #f5f7ff;
+    border: 1px solid #3b4252;
+}
+QStatusBar {
+    background: #262b35;
+    color: #f5f7ff;
+    border-top: 1px solid #3c4455;
+}
