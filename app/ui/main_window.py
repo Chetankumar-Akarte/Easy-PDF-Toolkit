@@ -39,6 +39,7 @@ from app.core.services.page_service import PageService
 from app.infra.pdf_engines.pymupdf_adapter import PyMuPDFAdapter
 from app.infra.storage.recent_files_repo import RecentFilesRepository
 from app.infra.storage.settings_repo import AppSettings, SettingsRepository
+from app.ui.dialogs import SplitExtractDialog
 from app.ui.panels.properties_panel import PropertiesPanel
 from app.ui.theme import ThemeColors, build_qss, get_theme, make_palette
 from app.ui.widgets.pdf_canvas import PdfCanvas
@@ -217,7 +218,7 @@ class MainWindow(QMainWindow):
         self.open_action.triggered.connect(self._open_file)
 
         self.close_action = QAction(self._icon("close_file"), "Close", self)
-        self.close_action.setShortcut(QKeySequence.StandardKey.Close)
+        self.close_action.setShortcut(QKeySequence("Ctrl+Shift+W"))
         self.close_action.triggered.connect(self._close_current_document)
 
         self.save_action = QAction(self._icon("save_file"), "Save", self)
@@ -240,14 +241,18 @@ class MainWindow(QMainWindow):
         self.delete_page_action = QAction(self._icon("delete_page"), "Delete Page", self)
         self.delete_page_action.triggered.connect(self._delete_current_page)
 
+        self.split_extract_action = QAction(self._icon("split_extract"), "Split / Extract Pages...", self)
+        self.split_extract_action.setShortcut(QKeySequence("Ctrl+X"))
+        self.split_extract_action.triggered.connect(self._open_split_extract_dialog)
+
         self.fit_width_action = QAction(self._icon("fit_width"), "Fit Width", self)
-        self.fit_width_action.setShortcut(QKeySequence("Ctrl+0"))
+        self.fit_width_action.setShortcut(QKeySequence("Ctrl+W"))
         self.fit_width_action.triggered.connect(self._fit_width)
 
         self.night_reading_action = QAction(self._icon("night_reading"), "Night Reading Mode", self)
         self.night_reading_action.setCheckable(True)
         self.night_reading_action.setChecked(self._night_reading_mode)
-        self.night_reading_action.setShortcut(QKeySequence("Ctrl+I"))
+        self.night_reading_action.setShortcut(QKeySequence("Ctrl+R"))
         self.night_reading_action.setToolTip("Night Reading Mode (invert colors)")
         self.night_reading_action.toggled.connect(self._toggle_night_reading_mode)
 
@@ -279,7 +284,7 @@ class MainWindow(QMainWindow):
         self._sync_reader_mode_ui()
 
         exit_action = QAction("Exit", self)
-        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        exit_action.setShortcut(QKeySequence("Ctrl+Q"))
         exit_action.triggered.connect(self._exit_application)
 
         about_action = QAction(self._icon("about_info"), "About", self)
@@ -294,6 +299,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.save_as_action)
         file_menu.addSeparator()
         file_menu.addAction(exit_action)
+
+        edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addAction(self.split_extract_action)
 
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.toggle_theme_action)
@@ -347,6 +355,18 @@ class MainWindow(QMainWindow):
         self.toc_toggle_button.setToolTip(self.toggle_toc_action.text())
         self._style_action_bar_button(self.toc_toggle_button)
         action_bar_layout.addWidget(self.toc_toggle_button)
+
+        split_separator = QFrame(self.action_bar)
+        split_separator.setFrameShape(QFrame.Shape.VLine)
+        split_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        split_separator.setFixedHeight(24)
+        action_bar_layout.addWidget(split_separator)
+
+        self.split_extract_button = QToolButton(self.action_bar)
+        self.split_extract_button.setDefaultAction(self.split_extract_action)
+        self.split_extract_button.setToolTip(self.split_extract_action.text())
+        self._style_action_bar_button(self.split_extract_button)
+        action_bar_layout.addWidget(self.split_extract_button)
 
         action_bar_layout.addStretch(1)
 
@@ -560,6 +580,7 @@ class MainWindow(QMainWindow):
         self.rotate_left_action.setEnabled(has_pages)
         self.rotate_right_action.setEnabled(has_pages)
         self.delete_page_action.setEnabled(has_pages)
+        self.split_extract_action.setEnabled(has_pages)
         self.fit_width_action.setEnabled(has_pages)
         self.night_reading_action.setEnabled(has_document)
         self.toggle_display_mode_action.setEnabled(has_document)
@@ -600,6 +621,7 @@ class MainWindow(QMainWindow):
         self.rotate_left_action.setIcon(self._icon("rotate_left"))
         self.rotate_right_action.setIcon(self._icon("rotate_right"))
         self.delete_page_action.setIcon(self._icon("delete_page"))
+        self.split_extract_action.setIcon(self._icon("split_extract"))
         self.fit_width_action.setIcon(self._icon("fit_width"))
         self.night_reading_action.setIcon(self._icon("night_reading"))
         self.toggle_toc_action.setIcon(self._icon("toc_bookmarks"))
@@ -1040,6 +1062,190 @@ class MainWindow(QMainWindow):
         if session is None:
             return
         self._delete_page(session.current_page)
+
+    def _open_split_extract_dialog(self) -> None:
+        session = self._current_session()
+        if session is None:
+            self.statusBar().showMessage("No document loaded")
+            return
+
+        dialog = SplitExtractDialog(
+            source_path=session.path,
+            current_page=session.current_page,
+            page_count=session.page_count,
+            theme=self._theme,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        request = dialog.build_request()
+
+        try:
+            if request.mode == SplitExtractDialog.MODE_CURRENT:
+                self._run_extract_current_page(session, request.save_to_current_location)
+            elif request.mode == SplitExtractDialog.MODE_RANGE:
+                self._run_extract_page_range(
+                    session,
+                    request.page_range_text,
+                    request.save_to_current_location,
+                )
+            else:
+                self._run_split_by_range(
+                    session,
+                    request.split_size,
+                    request.split_file_name_template,
+                    request.save_to_current_location,
+                )
+        except Exception as exc:
+            QMessageBox.critical(self, "Split / Extract Failed", f"Could not complete operation:\n{exc}")
+
+    def _run_extract_current_page(self, session: DocumentSession, save_to_current: bool) -> None:
+        page_number = session.current_page + 1
+        suggested_name = f"{Path(session.path).stem}_page_{page_number}.pdf"
+        destination = self._resolve_single_extract_destination(session, suggested_name, save_to_current)
+        if destination is None:
+            return
+
+        if destination.exists() and not self._confirm_overwrite_paths([destination]):
+            return
+
+        self.page_service.extract_pages(session.document, [session.current_page], str(destination))
+        self.statusBar().showMessage(f"Extracted current page to {destination.name}")
+
+    def _run_extract_page_range(self, session: DocumentSession, page_range_text: str, save_to_current: bool) -> None:
+        page_indices = self.page_service.parse_page_ranges(page_range_text, session.page_count)
+        compact = page_range_text.replace(" ", "").replace(",", "_").replace("-", "to")
+        suggested_name = f"{Path(session.path).stem}_extract_{compact}.pdf"
+        destination = self._resolve_single_extract_destination(session, suggested_name, save_to_current)
+        if destination is None:
+            return
+
+        if destination.exists() and not self._confirm_overwrite_paths([destination]):
+            return
+
+        self.page_service.extract_pages(session.document, page_indices, str(destination))
+        self.statusBar().showMessage(f"Extracted {len(page_indices)} pages to {destination.name}")
+
+    def _run_split_by_range(
+        self,
+        session: DocumentSession,
+        split_size: int,
+        template: str,
+        save_to_current: bool,
+    ) -> None:
+        if split_size <= 0:
+            raise ValueError("Split range must be greater than zero.")
+
+        output_dir = self._resolve_split_output_directory(session, save_to_current)
+        if output_dir is None:
+            return
+
+        output_paths: list[Path] = []
+        chunk_ranges: list[tuple[int, int]] = []
+        part_index = 1
+        for start in range(0, session.page_count, split_size):
+            end = min(start + split_size - 1, session.page_count - 1)
+            file_name = self._build_split_filename(
+                source_path=Path(session.path),
+                split_size=split_size,
+                part_index=part_index,
+                start_page=start + 1,
+                end_page=end + 1,
+                template=template,
+            )
+            output_paths.append(output_dir / file_name)
+            chunk_ranges.append((start, end))
+            part_index += 1
+
+        existing = [path for path in output_paths if path.exists()]
+        if existing and not self._confirm_overwrite_paths(existing):
+            return
+
+        created: list[Path] = []
+        for idx, (start, end) in enumerate(chunk_ranges):
+            page_indices = list(range(start, end + 1))
+            self.page_service.extract_pages(session.document, page_indices, str(output_paths[idx]))
+            created.append(output_paths[idx])
+
+        self.statusBar().showMessage(f"Split complete: {len(created)} files created in {output_dir}")
+
+    def _resolve_single_extract_destination(
+        self,
+        session: DocumentSession,
+        suggested_name: str,
+        save_to_current: bool,
+    ) -> Path | None:
+        current_path = Path(session.path)
+        if save_to_current:
+            return current_path.parent / suggested_name
+
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "Extract PDF",
+            str(current_path.parent / suggested_name),
+            "PDF files (*.pdf)",
+        )
+        if not selected:
+            return None
+
+        destination = Path(selected)
+        if destination.suffix.lower() != ".pdf":
+            destination = destination.with_suffix(".pdf")
+        return destination
+
+    def _resolve_split_output_directory(self, session: DocumentSession, save_to_current: bool) -> Path | None:
+        current_path = Path(session.path)
+        if save_to_current:
+            return current_path.parent
+
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Folder for Split Files",
+            str(current_path.parent),
+        )
+        if not selected:
+            return None
+        return Path(selected)
+
+    def _build_split_filename(
+        self,
+        source_path: Path,
+        split_size: int,
+        part_index: int,
+        start_page: int,
+        end_page: int,
+        template: str,
+    ) -> str:
+        return self._page_service.build_split_filename(
+            source_stem=source_path.stem,
+            split_size=split_size,
+            part_index=part_index,
+            start_page=start_page,
+            end_page=end_page,
+            template=template,
+        )
+
+    def _confirm_overwrite_paths(self, paths: list[Path]) -> bool:
+        if not paths:
+            return True
+
+        if len(paths) == 1:
+            message = f"{paths[0].name} already exists.\nDo you want to overwrite it?"
+        else:
+            message = (
+                f"{len(paths)} output files already exist in destination.\n"
+                "Do you want to overwrite them?"
+            )
+
+        answer = QMessageBox.question(
+            self,
+            "Overwrite Existing Files",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def _close_current_document(self) -> None:
         session = self._current_session()

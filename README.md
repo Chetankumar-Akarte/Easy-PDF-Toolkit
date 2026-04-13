@@ -25,15 +25,16 @@ A desktop-first, fully offline PDF toolkit built with Python and PySide6. View, 
 - **Reading Modes** — Light / dark app themes and Night Reading Mode (PDF invert) with quick toggle
 - **Zoom Controls** — Zoom in / out / reset with customizable level, viewport anchor preserved on zoom
 - **File Operations** — Open, Save (incremental), Save As with overwrite confirmation, Close tab
+- **Page Tools** — Rotate left/right, delete page, reorder pages, and Split / Extract Pages workflow (current page, custom ranges, split by size)
 - **Recent Documents** — Welcome screen lists last 10 opened files sorted by most recently opened; click to reopen; missing files are cleaned up automatically; clear history action included
 - **Persistent Settings** — Window size, position, and last-used folder remembered between launches
-- **Keyboard Shortcuts** — `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+W` Close, `Ctrl+Q` Exit
+- **Keyboard Shortcuts** — `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit
 - **About Dialog** — Help > About with app metadata, runtime details, and repository link
 
 ### Roadmap
 
 - Rendering parity polish — final quality alignment with reference viewer in all zoom/night scenarios
-- Page operations — rotate, delete, reorder, insert blank, extract, merge, split
+- Page operations — insert blank, merge
 - Text search — highlight navigation across pages
 - Annotations — text, highlight, underline, strikeout, sticky note, freehand draw
 - Overlay editing — add text boxes, images, shapes, stamps, signatures
@@ -126,6 +127,10 @@ python -m app.main
 ### About Dialog
 
 ![About Dialog](screenshot/08_Easy-PDF-Reader-About.png)
+
+### Split / Extract Pages
+
+![Split / Extract Pages](screenshot/09_Easy-PDF-Reader-Split-Extract_Pages.png)
 
 ---
 

@@ -228,6 +228,67 @@ QSpinBox {{
 QMessageBox, QDialog {{
     background: {theme.bg_panel};
 }}
+QDialog QFrame {{
+    color: {theme.text_primary};
+}}
+QLineEdit {{
+    background: {theme.bg_input};
+    border: 1px solid {theme.border};
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: {theme.text_primary};
+    selection-background-color: {theme.accent};
+    selection-color: #ffffff;
+}}
+QLineEdit:focus {{
+    border-color: {theme.accent};
+}}
+QLineEdit:disabled {{
+    background: {theme.bg_elevated};
+    color: {theme.text_secondary};
+    border-color: {theme.border};
+}}
+QLineEdit::placeholder {{
+    color: {theme.text_secondary};
+}}
+QRadioButton {{
+    color: {theme.text_primary};
+    spacing: 8px;
+    background: transparent;
+}}
+QRadioButton::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 2px solid {theme.border};
+    border-radius: 9px;
+    background: {theme.bg_input};
+}}
+QRadioButton::indicator:checked {{
+    background: {theme.accent};
+    border-color: {theme.accent};
+}}
+QRadioButton::indicator:hover {{
+    border-color: {theme.accent};
+}}
+QCheckBox {{
+    color: {theme.text_primary};
+    spacing: 8px;
+    background: transparent;
+}}
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 2px solid {theme.border};
+    border-radius: 4px;
+    background: {theme.bg_input};
+}}
+QCheckBox::indicator:checked {{
+    background: {theme.accent};
+    border-color: {theme.accent};
+}}
+QCheckBox::indicator:hover {{
+    border-color: {theme.accent};
+}}
 QWidget#propertiesPanel {{
     background: {theme.bg_panel};
     border-left: 1px solid {theme.border};
