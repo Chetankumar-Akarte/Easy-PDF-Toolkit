@@ -100,6 +100,25 @@ QListWidget#thumbnailList, QListWidget#welcomeList {{
     background: {theme.bg_panel};
     border-right: 1px solid {theme.border};
 }}
+QTabWidget#sidePanelTabs {{
+    background: {theme.bg_panel};
+    border-right: 1px solid {theme.border};
+}}
+QTabWidget#sidePanelTabs::pane {{
+    border: 1px solid {theme.border};
+    background: {theme.bg_panel};
+}}
+QTabWidget#sidePanelTabs QTabBar::tab {{
+    background: {theme.bg_elevated};
+    color: {theme.text_secondary};
+    border: 1px solid {theme.border};
+    padding: 4px 10px;
+    margin-right: 1px;
+}}
+QTabWidget#sidePanelTabs QTabBar::tab:selected {{
+    color: {theme.text_primary};
+    border-bottom: 2px solid {theme.accent};
+}}
 QListWidget#thumbnailList::item {{
     padding: 4px;
     margin: 2px;
@@ -121,12 +140,24 @@ QWidget#tocHeader {{
     background: {theme.bg_elevated};
     border-bottom: 1px solid {theme.border};
 }}
+QWidget#sidePanelHeader {{
+    background: {theme.bg_elevated};
+    border-bottom: 1px solid {theme.border};
+}}
 QToolButton#tocEdgeToggle {{
     background: {theme.bg_panel};
     border: 1px solid {theme.border};
     border-radius: 4px;
 }}
 QToolButton#tocEdgeToggle:hover {{
+    border-color: {theme.accent};
+}}
+QToolButton#sidePanelClose {{
+    background: {theme.bg_panel};
+    border: 1px solid {theme.border};
+    border-radius: 4px;
+}}
+QToolButton#sidePanelClose:hover {{
     border-color: {theme.accent};
 }}
 QTreeWidget#tocTree::item {{

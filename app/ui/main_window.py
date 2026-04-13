@@ -233,13 +233,22 @@ class MainWindow(QMainWindow):
         self.clear_recent_action.triggered.connect(self._clear_recent_history)
 
         self.rotate_left_action = QAction(self._icon("rotate_left"), "Rotate Left", self)
+        self.rotate_left_action.setShortcut(QKeySequence("Ctrl+Alt+Left"))
         self.rotate_left_action.triggered.connect(self._rotate_current_page_left)
 
         self.rotate_right_action = QAction(self._icon("rotate_right"), "Rotate Right", self)
+        self.rotate_right_action.setShortcut(QKeySequence("Ctrl+Alt+Right"))
         self.rotate_right_action.triggered.connect(self._rotate_current_page_right)
 
         self.delete_page_action = QAction(self._icon("delete_page"), "Delete Page", self)
+        self.delete_page_action.setShortcut(QKeySequence("Ctrl+D"))
         self.delete_page_action.triggered.connect(self._delete_current_page)
+
+        self.toggle_thumbnail_action = QAction(self._icon("thumbnail_panel"), "Thumbnails (Ctrl+T)", self)
+        self.toggle_thumbnail_action.setCheckable(True)
+        self.toggle_thumbnail_action.setChecked(True)
+        self.toggle_thumbnail_action.setShortcut(QKeySequence("Ctrl+T"))
+        self.toggle_thumbnail_action.toggled.connect(self._set_thumbnail_panel_visible)
 
         self.split_extract_action = QAction(self._icon("split_extract"), "Split / Extract Pages...", self)
         self.split_extract_action.setShortcut(QKeySequence("Ctrl+X"))
@@ -256,14 +265,15 @@ class MainWindow(QMainWindow):
         self.night_reading_action.setToolTip("Night Reading Mode (invert colors)")
         self.night_reading_action.toggled.connect(self._toggle_night_reading_mode)
 
-        self.toggle_toc_action = QAction(self._icon("toc_bookmarks"), "Bookmarks / TOC", self)
+        self.toggle_toc_action = QAction(self._icon("toc_bookmarks"), "Bookmarks / TOC (Ctrl+B)", self)
         self.toggle_toc_action.setCheckable(True)
         self.toggle_toc_action.setChecked(False)
+        self.toggle_toc_action.setShortcut(QKeySequence("Ctrl+B"))
         self.toggle_toc_action.toggled.connect(self._set_toc_panel_visible)
 
         self.toggle_theme_action = QAction(self)
         self.toggle_theme_action.setText("Light / Dark")
-        self.toggle_theme_action.setShortcut(QKeySequence("Ctrl+T"))
+        self.toggle_theme_action.setShortcut(QKeySequence("Ctrl+Alt+T"))
         self.toggle_theme_action.triggered.connect(self._toggle_theme)
 
         self.toggle_properties_action = QAction("Properties", self)
@@ -301,12 +311,17 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
         edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addAction(self.rotate_left_action)
+        edit_menu.addAction(self.rotate_right_action)
+        edit_menu.addAction(self.delete_page_action)
+        edit_menu.addSeparator()
         edit_menu.addAction(self.split_extract_action)
 
         view_menu = self.menuBar().addMenu("View")
         view_menu.addAction(self.toggle_theme_action)
         view_menu.addAction(self.fit_width_action)
         view_menu.addAction(self.night_reading_action)
+        view_menu.addAction(self.toggle_thumbnail_action)
         view_menu.addAction(self.view_continuous_action)
         view_menu.addAction(self.view_single_page_action)
         view_menu.addAction(self.toggle_toc_action)
@@ -350,6 +365,18 @@ class MainWindow(QMainWindow):
             self._style_action_bar_button(button)
             action_bar_layout.addWidget(button)
 
+        panel_separator = QFrame(self.action_bar)
+        panel_separator.setFrameShape(QFrame.Shape.VLine)
+        panel_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        panel_separator.setFixedHeight(24)
+        action_bar_layout.addWidget(panel_separator)
+
+        self.thumbnail_toggle_button = QToolButton(self.action_bar)
+        self.thumbnail_toggle_button.setDefaultAction(self.toggle_thumbnail_action)
+        self.thumbnail_toggle_button.setToolTip(self.toggle_thumbnail_action.text())
+        self._style_action_bar_button(self.thumbnail_toggle_button)
+        action_bar_layout.addWidget(self.thumbnail_toggle_button)
+
         self.toc_toggle_button = QToolButton(self.action_bar)
         self.toc_toggle_button.setDefaultAction(self.toggle_toc_action)
         self.toc_toggle_button.setToolTip(self.toggle_toc_action.text())
@@ -386,10 +413,37 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal, root)
         self.main_splitter = splitter
 
-        self.thumbnail_list = QListWidget(splitter)
+        self.side_panel_tabs = QTabWidget(splitter)
+        self.side_panel_tabs.setObjectName("sidePanelTabs")
+        self.side_panel_tabs.setTabsClosable(True)
+        self.side_panel_tabs.tabCloseRequested.connect(self._on_side_panel_tab_close_requested)
+
+        self.thumbnail_tab = QWidget(self.side_panel_tabs)
+        thumbnail_layout = QVBoxLayout(self.thumbnail_tab)
+        thumbnail_layout.setContentsMargins(0, 0, 0, 0)
+        thumbnail_layout.setSpacing(0)
+
+        thumbnail_header = QWidget(self.thumbnail_tab)
+        thumbnail_header.setObjectName("sidePanelHeader")
+        thumbnail_header_layout = QHBoxLayout(thumbnail_header)
+        thumbnail_header_layout.setContentsMargins(8, 6, 6, 6)
+        thumbnail_header_layout.setSpacing(4)
+        self.thumbnail_header_label = QLabel("Thumbnails", thumbnail_header)
+        thumbnail_header_layout.addWidget(self.thumbnail_header_label)
+        thumbnail_header_layout.addStretch(1)
+        self.thumbnail_close_button = QToolButton(thumbnail_header)
+        self.thumbnail_close_button.setObjectName("sidePanelClose")
+        self.thumbnail_close_button.setText("✕")
+        self.thumbnail_close_button.setFixedSize(22, 22)
+        self.thumbnail_close_button.setToolTip("Close Thumbnails")
+        self.thumbnail_close_button.clicked.connect(lambda: self.toggle_thumbnail_action.setChecked(False))
+        thumbnail_header_layout.addWidget(self.thumbnail_close_button)
+        thumbnail_layout.addWidget(thumbnail_header)
+
+        self.thumbnail_list = QListWidget(self.thumbnail_tab)
         self.thumbnail_list.setObjectName("thumbnailList")
         self.thumbnail_list.setMinimumWidth(170)
-        self.thumbnail_list.setMaximumWidth(190)
+        self.thumbnail_list.setMaximumWidth(300)
         self.thumbnail_list.setIconSize(QSize(self.THUMBNAIL_WIDTH, self.THUMBNAIL_HEIGHT))
         self.thumbnail_list.setViewMode(QListView.ViewMode.IconMode)
         self.thumbnail_list.setFlow(QListView.Flow.TopToBottom)
@@ -405,49 +459,47 @@ class MainWindow(QMainWindow):
         self.thumbnail_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.thumbnail_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.thumbnail_list.model().rowsMoved.connect(self._on_thumbnail_rows_moved)
+        thumbnail_layout.addWidget(self.thumbnail_list)
 
-        reader_area = QWidget(splitter)
-        reader_layout = QVBoxLayout(reader_area)
-        reader_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.reader_splitter = QSplitter(Qt.Orientation.Horizontal, reader_area)
-        self.reader_splitter.setChildrenCollapsible(False)
-
-        self.toc_panel = QWidget(self.reader_splitter)
-        self.toc_panel.setObjectName("tocPanel")
-        toc_layout = QVBoxLayout(self.toc_panel)
+        self.toc_tab = QWidget(self.side_panel_tabs)
+        self.toc_tab.setObjectName("tocPanel")
+        toc_layout = QVBoxLayout(self.toc_tab)
         toc_layout.setContentsMargins(0, 0, 0, 0)
         toc_layout.setSpacing(0)
 
-        toc_header = QWidget(self.toc_panel)
+        toc_header = QWidget(self.toc_tab)
         toc_header.setObjectName("tocHeader")
         toc_header_layout = QHBoxLayout(toc_header)
         toc_header_layout.setContentsMargins(8, 6, 6, 6)
         toc_header_layout.setSpacing(4)
-        self.toc_header_label = QLabel("Bookmarks", toc_header)
+        self.toc_header_label = QLabel("Bookmarks / TOC", toc_header)
         toc_header_layout.addWidget(self.toc_header_label)
         toc_header_layout.addStretch(1)
         self.toc_edge_toggle_button = QToolButton(toc_header)
         self.toc_edge_toggle_button.setObjectName("tocEdgeToggle")
-        self.toc_edge_toggle_button.setText("◀")
+        self.toc_edge_toggle_button.setText("✕")
         self.toc_edge_toggle_button.setFixedSize(22, 22)
-        self.toc_edge_toggle_button.setToolTip("Collapse TOC")
+        self.toc_edge_toggle_button.setToolTip("Close Bookmarks / TOC")
         self.toc_edge_toggle_button.clicked.connect(lambda: self.toggle_toc_action.setChecked(False))
         toc_header_layout.addWidget(self.toc_edge_toggle_button)
         toc_layout.addWidget(toc_header)
 
-        self.toc_tree = QTreeWidget(self.toc_panel)
+        self.toc_tree = QTreeWidget(self.toc_tab)
         self.toc_tree.setObjectName("tocTree")
         self.toc_tree.setHeaderHidden(True)
         self.toc_tree.setMinimumWidth(190)
         self.toc_tree.setMaximumWidth(300)
         self.toc_tree.itemClicked.connect(self._on_toc_item_clicked)
-        self.toc_tree.setVisible(False)
         toc_layout.addWidget(self.toc_tree)
 
-        self.toc_panel.setVisible(False)
+        self.thumbnail_tab_index = self.side_panel_tabs.addTab(self.thumbnail_tab, "Thumbnails")
+        self.toc_tab_index = self.side_panel_tabs.addTab(self.toc_tab, "Bookmarks / TOC")
 
-        self.tab_widget = QTabWidget(self.reader_splitter)
+        reader_area = QWidget(splitter)
+        reader_layout = QVBoxLayout(reader_area)
+        reader_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.tab_widget = QTabWidget(reader_area)
         self.tab_widget.setObjectName("documentTabs")
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
@@ -460,9 +512,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.welcome_list, "Welcome")
         self._refresh_welcome_recent_documents()
 
-        self.reader_splitter.setSizes([0, 1000])
-
-        reader_layout.addWidget(self.reader_splitter)
+        reader_layout.addWidget(self.tab_widget)
 
         self.reader_controls = QWidget(reader_area)
         self.reader_controls.setObjectName("readerControls")
@@ -567,6 +617,8 @@ class MainWindow(QMainWindow):
         self.properties_panel.setVisible(False)
 
         splitter.setSizes([250, 1050, 0])
+        self._set_thumbnail_panel_visible(True)
+        self._set_toc_panel_visible(False)
         root_layout.addWidget(splitter)
 
         self.setCentralWidget(root)
@@ -584,6 +636,7 @@ class MainWindow(QMainWindow):
         self.fit_width_action.setEnabled(has_pages)
         self.night_reading_action.setEnabled(has_document)
         self.toggle_display_mode_action.setEnabled(has_document)
+        self.toggle_thumbnail_action.setEnabled(has_document)
         if hasattr(self, "night_mode_badge_button"):
             self.night_mode_badge_button.setEnabled(has_document)
         has_toc = hasattr(self, "toc_tree") and self.toc_tree.topLevelItemCount() > 0
@@ -594,10 +647,29 @@ class MainWindow(QMainWindow):
             return
 
         self.properties_panel.setVisible(visible)
-        if visible:
-            self.main_splitter.setSizes([230, 820, 300])
-        else:
+        self._update_side_panel_sizes()
+
+    def _on_side_panel_tab_close_requested(self, index: int) -> None:
+        if index == self.thumbnail_tab_index:
+            self.toggle_thumbnail_action.setChecked(False)
+        elif index == self.toc_tab_index:
+            self.toggle_toc_action.setChecked(False)
+
+    def _update_side_panel_sizes(self) -> None:
+        if not hasattr(self, "main_splitter"):
+            return
+
+        left_visible = hasattr(self, "side_panel_tabs") and self.side_panel_tabs.isVisible()
+        props_visible = hasattr(self, "properties_panel") and self.properties_panel.isVisible()
+
+        if left_visible and props_visible:
+            self.main_splitter.setSizes([250, 800, 300])
+        elif left_visible and not props_visible:
             self.main_splitter.setSizes([250, 1050, 0])
+        elif not left_visible and props_visible:
+            self.main_splitter.setSizes([0, 1050, 300])
+        else:
+            self.main_splitter.setSizes([0, 1300, 0])
 
     def _apply_theme(self) -> None:
         self._theme = get_theme(self._settings.theme)
@@ -621,6 +693,7 @@ class MainWindow(QMainWindow):
         self.rotate_left_action.setIcon(self._icon("rotate_left"))
         self.rotate_right_action.setIcon(self._icon("rotate_right"))
         self.delete_page_action.setIcon(self._icon("delete_page"))
+        self.toggle_thumbnail_action.setIcon(self._icon("thumbnail_panel"))
         self.split_extract_action.setIcon(self._icon("split_extract"))
         self.fit_width_action.setIcon(self._icon("fit_width"))
         self.night_reading_action.setIcon(self._icon("night_reading"))
@@ -630,7 +703,7 @@ class MainWindow(QMainWindow):
         theme_icon = "theme_sun" if self._settings.theme == "dark" else "theme_moon"
         self.toggle_theme_action.setIcon(self._icon(theme_icon))
         self.toggle_theme_action.setText("Light / Dark")
-        self.toggle_theme_action.setToolTip(f"Switch to {next_theme.title()} Theme (Ctrl+T)")
+        self.toggle_theme_action.setToolTip(f"Switch to {next_theme.title()} Theme (Ctrl+Alt+T)")
 
         self.night_reading_action.setText("Night Reading Mode")
         self.night_reading_action.setToolTip("Night Reading Mode (invert colors)")
@@ -1514,22 +1587,43 @@ class MainWindow(QMainWindow):
         self.thumbnail_list.setCurrentRow(page_index)
         self.thumbnail_list.blockSignals(False)
 
+    def _set_thumbnail_panel_visible(self, visible: bool) -> None:
+        if not hasattr(self, "side_panel_tabs"):
+            return
+
+        self.side_panel_tabs.setTabVisible(self.thumbnail_tab_index, visible)
+        if visible:
+            self.side_panel_tabs.setCurrentIndex(self.thumbnail_tab_index)
+
+        self._refresh_toc_toggle_ui(
+            toc_visible=self.side_panel_tabs.isTabVisible(self.toc_tab_index),
+            has_toc=self.toc_tree.topLevelItemCount() > 0,
+        )
+        self.side_panel_tabs.setVisible(
+            self.side_panel_tabs.isTabVisible(self.thumbnail_tab_index)
+            or self.side_panel_tabs.isTabVisible(self.toc_tab_index)
+        )
+        self._update_side_panel_sizes()
+
     def _set_toc_panel_visible(self, visible: bool) -> None:
+        if not hasattr(self, "side_panel_tabs"):
+            return
+
         has_toc = self.toc_tree.topLevelItemCount() > 0
         final_visible = visible and has_toc
-        self.toc_panel.setVisible(final_visible)
-        self.toc_tree.setVisible(final_visible)
+        self.side_panel_tabs.setTabVisible(self.toc_tab_index, final_visible)
         if final_visible:
-            self.reader_splitter.setSizes([240, 900])
-        else:
-            self.reader_splitter.setSizes([0, 1140])
+            self.side_panel_tabs.setCurrentIndex(self.toc_tab_index)
+
+        any_visible = self.side_panel_tabs.isTabVisible(self.thumbnail_tab_index) or final_visible
+        self.side_panel_tabs.setVisible(any_visible)
         self._refresh_toc_toggle_ui(final_visible, has_toc)
+        self._update_side_panel_sizes()
 
     def _refresh_toc_toggle_ui(self, toc_visible: bool, has_toc: bool) -> None:
         if hasattr(self, "toc_edge_toggle_button"):
             self.toc_edge_toggle_button.setEnabled(has_toc)
-            self.toc_edge_toggle_button.setText("◀" if toc_visible else "▶")
-            self.toc_edge_toggle_button.setToolTip("Collapse TOC" if toc_visible else "Expand TOC")
+            self.toc_edge_toggle_button.setToolTip("Close Bookmarks / TOC")
 
         if hasattr(self, "toc_toggle_button"):
             self.toc_toggle_button.setEnabled(has_toc)
