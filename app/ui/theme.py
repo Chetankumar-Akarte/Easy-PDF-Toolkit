@@ -211,6 +211,24 @@ QWidget#actionBar {{
     background: {theme.bg_elevated};
     border-bottom: 1px solid {theme.border};
 }}
+QWidget#searchBar {{
+    background: {theme.bg_elevated};
+    border-bottom: 1px solid {theme.border};
+}}
+QWidget#searchBar QToolButton {{
+    background: {theme.bg_panel};
+    border: 1px solid {theme.border};
+    border-radius: 4px;
+}}
+QWidget#searchBar QToolButton:hover {{
+    border-color: {theme.accent};
+}}
+QLabel#searchResultLabel {{
+    color: {theme.text_secondary};
+}}
+QLineEdit#documentSearchInput[noResults="true"] {{
+    border-color: {theme.danger};
+}}
 QWidget#actionBar QToolButton, QWidget#readerControls QToolButton {{
     background: {theme.bg_panel};
     border: 1px solid {theme.border};

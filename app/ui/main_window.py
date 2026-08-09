@@ -5,8 +5,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QFontDatabase, QGuiApplication, QIcon, QImage, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QFontDatabase, QGuiApplication, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListView,
     QListWidget,
     QListWidgetItem,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from app.core.services.document_service import DocumentService
 from app.core.services.page_service import PageService
+from app.core.services.viewer_service import SearchMatch, ViewerService
 from app.infra.pdf_engines.pymupdf_adapter import PyMuPDFAdapter
 from app.infra.storage.recent_files_repo import RecentFilesRepository
 from app.infra.storage.settings_repo import AppSettings, SettingsRepository
@@ -57,6 +59,10 @@ class DocumentSession:
     page_cache: dict[int, object] = field(default_factory=dict)
     thumbnail_cache: dict[int, QIcon] = field(default_factory=dict)
     render_queue: list[int] = field(default_factory=list)
+    thumbnail_queue: list[int] = field(default_factory=list)
+    search_query: str = ""
+    search_matches: list[SearchMatch] = field(default_factory=list)
+    active_search_match: int = -1
 
 
 class MainWindow(QMainWindow):
@@ -65,6 +71,7 @@ class MainWindow(QMainWindow):
     THUMBNAIL_WIDTH = 110
     THUMBNAIL_HEIGHT = 150
     THUMBNAIL_CACHE_LIMIT = 96
+    THUMBNAIL_LOADING_ROLE = int(Qt.ItemDataRole.UserRole) + 1
     PRIORITY_RENDER_RADIUS = 2
     VIRTUAL_RENDER_RADIUS = 5
     PAGE_CACHE_LIMIT = 18
@@ -87,11 +94,26 @@ class MainWindow(QMainWindow):
         self._night_reading_mode = bool(self._settings.night_mode)
         self.document_service = DocumentService()
         self.page_service = PageService()
+        self.viewer_service = ViewerService()
         self.pdf_adapter = PyMuPDFAdapter()
         self._sessions_by_tab_index: dict[int, DocumentSession] = {}
         self._background_render_timer = QTimer(self)
         self._background_render_timer.setInterval(0)
         self._background_render_timer.timeout.connect(self._process_background_render_step)
+        self._thumbnail_progress_angle = 0
+        self._thumbnail_progress_timer = QTimer(self)
+        self._thumbnail_progress_timer.setInterval(90)
+        self._thumbnail_progress_timer.timeout.connect(self._animate_thumbnail_progress)
+        self._search_debounce_timer = QTimer(self)
+        self._search_debounce_timer.setSingleShot(True)
+        self._search_debounce_timer.setInterval(250)
+        self._search_debounce_timer.timeout.connect(self._perform_search)
+        self._search_scan_timer = QTimer(self)
+        self._search_scan_timer.setInterval(0)
+        self._search_scan_timer.timeout.connect(self._process_search_page)
+        self._search_scan_session: DocumentSession | None = None
+        self._search_scan_query = ""
+        self._search_scan_page = 0
         self._build_window()
         self._build_actions()
         self._build_layout()
@@ -234,6 +256,10 @@ class MainWindow(QMainWindow):
         self.clear_recent_action = QAction(self._icon("clear_recent"), "Clear Recent History", self)
         self.clear_recent_action.triggered.connect(self._clear_recent_history)
 
+        self.search_action = QAction(self._icon("search"), "Find...", self)
+        self.search_action.setShortcut(QKeySequence.StandardKey.Find)
+        self.search_action.triggered.connect(self._show_search_bar)
+
         self.rotate_left_action = QAction(self._icon("rotate_left"), "Rotate Left", self)
         self.rotate_left_action.setShortcut(QKeySequence("Ctrl+Alt+Left"))
         self.rotate_left_action.triggered.connect(self._rotate_current_page_left)
@@ -317,6 +343,8 @@ class MainWindow(QMainWindow):
         self.file_menu.addAction(self.exit_action)
 
         self.edit_menu = self.menuBar().addMenu("Edit")
+        self.edit_menu.addAction(self.search_action)
+        self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.rotate_left_action)
         self.edit_menu.addAction(self.rotate_right_action)
         self.edit_menu.addAction(self.delete_page_action)
@@ -377,6 +405,12 @@ class MainWindow(QMainWindow):
         panel_separator.setFrameShadow(QFrame.Shadow.Sunken)
         panel_separator.setFixedHeight(24)
         action_bar_layout.addWidget(panel_separator)
+
+        self.search_button = QToolButton(self.action_bar)
+        self.search_button.setDefaultAction(self.search_action)
+        self.search_button.setToolTip("Find in document (Ctrl+F)")
+        self._style_action_bar_button(self.search_button)
+        action_bar_layout.addWidget(self.search_button)
 
         self.thumbnail_toggle_button = QToolButton(self.action_bar)
         self.thumbnail_toggle_button.setDefaultAction(self.toggle_thumbnail_action)
@@ -526,6 +560,60 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.welcome_list, "Welcome")
         self._refresh_welcome_recent_documents()
 
+        self.search_bar = QWidget(reader_area)
+        self.search_bar.setObjectName("searchBar")
+        search_layout = QHBoxLayout(self.search_bar)
+        search_layout.setContentsMargins(10, 5, 10, 5)
+        search_layout.setSpacing(6)
+        search_layout.addStretch(1)
+
+        self.search_input = QLineEdit(self.search_bar)
+        self.search_input.setObjectName("documentSearchInput")
+        self.search_input.setPlaceholderText("Find in document")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMinimumWidth(280)
+        self.search_input.setMaximumWidth(460)
+        self.search_input.textChanged.connect(self._on_search_text_changed)
+        self.search_input.returnPressed.connect(self._go_next_search_match)
+        search_layout.addWidget(self.search_input)
+
+        self.search_result_label = QLabel("0 / 0", self.search_bar)
+        self.search_result_label.setObjectName("searchResultLabel")
+        self.search_result_label.setMinimumWidth(72)
+        self.search_result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        search_layout.addWidget(self.search_result_label)
+
+        self.search_previous_button = QToolButton(self.search_bar)
+        self.search_previous_button.setIcon(self._icon("prev_page"))
+        self.search_previous_button.setToolTip("Previous match (Shift+Enter)")
+        self.search_previous_button.clicked.connect(self._go_previous_search_match)
+        self._style_icon_button(self.search_previous_button)
+        search_layout.addWidget(self.search_previous_button)
+
+        self.search_next_button = QToolButton(self.search_bar)
+        self.search_next_button.setIcon(self._icon("next_page"))
+        self.search_next_button.setToolTip("Next match (Enter)")
+        self.search_next_button.clicked.connect(self._go_next_search_match)
+        self._style_icon_button(self.search_next_button)
+        search_layout.addWidget(self.search_next_button)
+
+        self.search_close_button = QToolButton(self.search_bar)
+        self.search_close_button.setIcon(self._icon("close_file"))
+        self.search_close_button.setToolTip("Close search (Esc)")
+        self.search_close_button.clicked.connect(self._hide_search_bar)
+        self._style_icon_button(self.search_close_button)
+        search_layout.addWidget(self.search_close_button)
+        search_layout.addStretch(1)
+
+        self.search_bar.setVisible(False)
+        self._search_previous_shortcut = QShortcut(QKeySequence("Shift+Return"), self.search_bar)
+        self._search_previous_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._search_previous_shortcut.activated.connect(self._go_previous_search_match)
+        self._search_escape_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.search_bar)
+        self._search_escape_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._search_escape_shortcut.activated.connect(self._hide_search_bar)
+
+        reader_layout.addWidget(self.search_bar)
         reader_layout.addWidget(self.tab_widget)
 
         self.reader_controls = QWidget(reader_area)
@@ -648,6 +736,7 @@ class MainWindow(QMainWindow):
         self.delete_page_action.setEnabled(has_pages)
         self.split_extract_action.setEnabled(has_pages)
         self.extract_images_action.setEnabled(has_pages)
+        self.search_action.setEnabled(has_pages)
         self.fit_width_action.setEnabled(has_pages)
         self.night_reading_action.setEnabled(has_document)
         self.toggle_display_mode_action.setEnabled(has_document)
@@ -706,6 +795,7 @@ class MainWindow(QMainWindow):
         self.save_action.setIcon(self._icon("save_file"))
         self.save_as_action.setIcon(self._icon("save_as"))
         self.clear_recent_action.setIcon(self._icon("clear_recent"))
+        self.search_action.setIcon(self._icon("search"))
         self.rotate_left_action.setIcon(self._icon("rotate_left"))
         self.rotate_right_action.setIcon(self._icon("rotate_right"))
         self.delete_page_action.setIcon(self._icon("delete_page"))
@@ -727,6 +817,7 @@ class MainWindow(QMainWindow):
             self.save_action,
             self.save_as_action,
             self.clear_recent_action,
+            self.search_action,
             self.rotate_left_action,
             self.rotate_right_action,
             self.delete_page_action,
@@ -763,6 +854,9 @@ class MainWindow(QMainWindow):
             self.zoom_in_button.setIcon(self._icon("zoom_in"))
             self.reset_zoom_button.setIcon(self._icon("reset_zoom"))
             self.fit_width_button.setIcon(self._icon("fit_width"))
+            self.search_previous_button.setIcon(self._icon("prev_page"))
+            self.search_next_button.setIcon(self._icon("next_page"))
+            self.search_close_button.setIcon(self._icon("close_file"))
 
         self._refresh_night_badge_ui()
 
@@ -794,6 +888,7 @@ class MainWindow(QMainWindow):
             session.page_cache.clear()
             session.thumbnail_cache.clear()
             session.render_queue.clear()
+            session.thumbnail_queue = list(range(session.page_count))
             for page_index in range(session.page_count):
                 session.canvas.clear_page_image(page_index)
 
@@ -881,6 +976,7 @@ class MainWindow(QMainWindow):
             canvas=canvas,
             page_count=page_count,
             page_sizes=page_sizes,
+            thumbnail_queue=list(range(page_count)),
         )
         self._sessions_by_tab_index[tab_index] = session
 
@@ -924,6 +1020,207 @@ class MainWindow(QMainWindow):
         self.recent_files_repo.clear()
         self._refresh_welcome_recent_documents()
         self.statusBar().showMessage("Recent history cleared")
+
+    def _show_search_bar(self) -> None:
+        session = self._current_session()
+        if session is None:
+            self.statusBar().showMessage("Open a document to search")
+            return
+
+        self.search_bar.setVisible(True)
+        self._sync_search_ui(session)
+        self.search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.search_input.selectAll()
+
+    def _hide_search_bar(self) -> None:
+        self._search_debounce_timer.stop()
+        self._cancel_search_scan()
+        session = self._current_session()
+        if session is not None:
+            self._clear_session_search(session)
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+        self.search_bar.setVisible(False)
+
+    def _on_search_text_changed(self, text: str) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+
+        session.search_query = text
+        self._cancel_search_scan()
+        session.search_matches.clear()
+        session.active_search_match = -1
+        session.canvas.set_search_highlights({}, None)
+        if not text.strip():
+            self._search_debounce_timer.stop()
+            self._apply_search_state(session)
+            return
+
+        self.search_result_label.setText("Searching...")
+        self.search_previous_button.setEnabled(False)
+        self.search_next_button.setEnabled(False)
+        self._set_search_no_results(False)
+        self._search_debounce_timer.start()
+
+    def _perform_search(self) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+
+        query = session.search_query.strip()
+        if not query:
+            self._clear_session_search(session)
+            return
+
+        self._cancel_search_scan()
+        session.search_matches.clear()
+        session.active_search_match = -1
+        session.canvas.set_search_highlights({}, None)
+        self.search_previous_button.setEnabled(False)
+        self.search_next_button.setEnabled(False)
+        self._set_search_no_results(False)
+        self._search_scan_session = session
+        self._search_scan_query = query
+        self._search_scan_page = 0
+        self.search_result_label.setText(f"Searching 0 / {session.page_count}")
+        self._search_scan_timer.start()
+
+    def _process_search_page(self) -> None:
+        session = self._search_scan_session
+        if (
+            session is None
+            or session is not self._current_session()
+            or session.search_query.strip() != self._search_scan_query
+        ):
+            self._cancel_search_scan()
+            return
+
+        if self._search_scan_page >= session.page_count:
+            self._search_scan_timer.stop()
+            session.active_search_match = self._first_match_index_for_page(
+                session.search_matches,
+                session.current_page,
+            )
+            self._search_scan_session = None
+            self._apply_search_state(session, focus_active=bool(session.search_matches))
+            return
+
+        try:
+            session.search_matches.extend(
+                self.viewer_service.search_page(
+                    session.document,
+                    self._search_scan_page,
+                    self._search_scan_query,
+                )
+            )
+        except Exception as exc:
+            self._cancel_search_scan()
+            session.search_matches.clear()
+            session.active_search_match = -1
+            self._apply_search_state(session)
+            QMessageBox.critical(self, "Search Failed", f"Could not search this PDF:\n{exc}")
+            return
+
+        self._search_scan_page += 1
+        self.search_result_label.setText(
+            f"Searching {self._search_scan_page} / {session.page_count}"
+        )
+
+    def _cancel_search_scan(self) -> None:
+        self._search_scan_timer.stop()
+        self._search_scan_session = None
+        self._search_scan_query = ""
+        self._search_scan_page = 0
+
+    @staticmethod
+    def _first_match_index_for_page(matches: list[SearchMatch], page_index: int) -> int:
+        for match_index, match in enumerate(matches):
+            if match.page_index >= page_index:
+                return match_index
+        return 0 if matches else -1
+
+    def _go_previous_search_match(self) -> None:
+        self._navigate_search_matches(-1)
+
+    def _go_next_search_match(self) -> None:
+        self._navigate_search_matches(1)
+
+    def _navigate_search_matches(self, direction: int) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+        if not session.search_matches:
+            if session.search_query.strip():
+                self._perform_search()
+            return
+
+        session.active_search_match = (
+            session.active_search_match + direction
+        ) % len(session.search_matches)
+        self._apply_search_state(session, focus_active=True)
+
+    def _apply_search_state(self, session: DocumentSession, focus_active: bool = False) -> None:
+        highlights: dict[int, list[tuple[float, float, float, float]]] = {}
+        for match in session.search_matches:
+            highlights.setdefault(match.page_index, []).append(match.rect)
+
+        active_match = None
+        if 0 <= session.active_search_match < len(session.search_matches):
+            match = session.search_matches[session.active_search_match]
+            active_match = (match.page_index, match.rect)
+
+        session.canvas.set_search_highlights(highlights, active_match)
+        match_count = len(session.search_matches)
+        has_matches = match_count > 0
+        current_number = session.active_search_match + 1 if has_matches else 0
+        self.search_result_label.setText(f"{current_number} / {match_count}")
+        self.search_previous_button.setEnabled(has_matches)
+        self.search_next_button.setEnabled(has_matches)
+        self._set_search_no_results(bool(session.search_query.strip()) and not has_matches)
+
+        if focus_active and active_match is not None:
+            page_index, rect = active_match
+            self._render_current_page(page_index, scroll_to_page=False)
+            session.canvas.focus_search_match(page_index, rect)
+            self.statusBar().showMessage(
+                f'Found "{session.search_query.strip()}" | Match {current_number} of {match_count} | Page {page_index + 1}'
+            )
+        elif session.search_query.strip() and not has_matches:
+            self.statusBar().showMessage(f'No matches for "{session.search_query.strip()}"')
+
+    def _set_search_no_results(self, no_results: bool) -> None:
+        self.search_input.setProperty("noResults", no_results)
+        self.search_input.style().unpolish(self.search_input)
+        self.search_input.style().polish(self.search_input)
+
+    def _clear_session_search(self, session: DocumentSession) -> None:
+        session.search_query = ""
+        session.search_matches.clear()
+        session.active_search_match = -1
+        self._apply_search_state(session)
+
+    def _restart_search_after_document_change(self, session: DocumentSession) -> None:
+        if not session.search_query.strip():
+            return
+        self._cancel_search_scan()
+        session.search_matches.clear()
+        session.active_search_match = -1
+        session.canvas.set_search_highlights({}, None)
+        self._perform_search()
+
+    def _sync_search_ui(self, session: DocumentSession | None) -> None:
+        self.search_input.blockSignals(True)
+        self.search_input.setText(session.search_query if session is not None else "")
+        self.search_input.blockSignals(False)
+        if session is None:
+            self.search_result_label.setText("0 / 0")
+            self.search_previous_button.setEnabled(False)
+            self.search_next_button.setEnabled(False)
+            self._set_search_no_results(False)
+            return
+        self._apply_search_state(session)
 
     def _open_recent_item(self, item: QListWidgetItem) -> None:
         item_path = item.data(Qt.ItemDataRole.UserRole)
@@ -1556,12 +1853,19 @@ class MainWindow(QMainWindow):
     def _close_tab(self, index: int) -> None:
         session = self._sessions_by_tab_index.pop(index, None)
         if session is not None:
+            if session is self._search_scan_session:
+                self._cancel_search_scan()
             self.pdf_adapter.close_document(session.document)
 
         self.tab_widget.removeTab(index)
         self._rebuild_session_index()
 
         if self.tab_widget.count() == 0:
+            self._search_debounce_timer.stop()
+            self.search_input.blockSignals(True)
+            self.search_input.clear()
+            self.search_input.blockSignals(False)
+            self.search_bar.setVisible(False)
             self._refresh_welcome_recent_documents()
             self.tab_widget.addTab(self.welcome_list, "Welcome")
             self.thumbnail_list.clear()
@@ -1578,6 +1882,8 @@ class MainWindow(QMainWindow):
         self._sync_document_actions(page_count=current_session.page_count if current_session is not None else 0)
 
     def _on_tab_changed(self, _index: int) -> None:
+        self._search_debounce_timer.stop()
+        self._cancel_search_scan()
         self._load_thumbnails_for_current_session()
         self._load_toc_for_current_session()
         session = self._current_session()
@@ -1588,6 +1894,7 @@ class MainWindow(QMainWindow):
             self._sync_document_actions(page_count=session.page_count)
         else:
             self._sync_document_actions(page_count=0)
+        self._sync_search_ui(session)
 
     def _on_thumbnail_selected(self, page_index: int) -> None:
         if page_index < 0:
@@ -1680,19 +1987,88 @@ class MainWindow(QMainWindow):
         session = self._current_session()
         self.thumbnail_list.clear()
         if session is None:
+            self._thumbnail_progress_timer.stop()
             self.thumbnail_list.addItem("No document loaded")
             self._sync_page_controls(page_count=0, current_page=0)
             return
 
+        progress_icon = self._thumbnail_progress_icon()
         for page_index in range(session.page_count):
-            icon = session.thumbnail_cache.get(page_index, QIcon())
+            is_loading = page_index not in session.thumbnail_cache
+            icon = session.thumbnail_cache.get(page_index, progress_icon)
             item = QListWidgetItem(icon, f"Page {page_index + 1}")
             item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
             item.setData(Qt.ItemDataRole.UserRole, page_index)
+            item.setData(self.THUMBNAIL_LOADING_ROLE, is_loading)
             self.thumbnail_list.addItem(item)
 
         self._set_thumbnail_selection(session.current_page)
         self._sync_page_controls(page_count=session.page_count, current_page=session.current_page)
+        self._sync_thumbnail_progress_timer(session)
+
+    def _thumbnail_progress_icon(self) -> QIcon:
+        pixmap = QPixmap(self.THUMBNAIL_WIDTH, self.THUMBNAIL_HEIGHT)
+        pixmap.fill(QColor(self._theme.bg_elevated))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(self._theme.border), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        spinner_rect = QRectF(
+            (self.THUMBNAIL_WIDTH - 34) / 2,
+            (self.THUMBNAIL_HEIGHT - 34) / 2,
+            34,
+            34,
+        )
+        painter.drawArc(spinner_rect, 0, 360 * 16)
+        painter.setPen(QPen(QColor(self._theme.accent), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(spinner_rect, self._thumbnail_progress_angle * 16, 105 * 16)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _animate_thumbnail_progress(self) -> None:
+        session = self._current_session()
+        if session is None or self.thumbnail_list.count() != session.page_count:
+            self._thumbnail_progress_timer.stop()
+            return
+
+        self._thumbnail_progress_angle = (self._thumbnail_progress_angle - 24) % 360
+        progress_icon = self._thumbnail_progress_icon()
+        has_pending = False
+        for page_index in range(session.page_count):
+            item = self.thumbnail_list.item(page_index)
+            if item is None or not item.data(self.THUMBNAIL_LOADING_ROLE):
+                continue
+            has_pending = True
+            if self.thumbnail_list.viewport().rect().intersects(
+                self.thumbnail_list.visualItemRect(item)
+            ):
+                item.setIcon(progress_icon)
+
+        if not has_pending:
+            self._thumbnail_progress_timer.stop()
+
+    def _sync_thumbnail_progress_timer(self, session: DocumentSession) -> None:
+        has_pending = any(
+            item is not None and bool(item.data(self.THUMBNAIL_LOADING_ROLE))
+            for item in (
+                self.thumbnail_list.item(page_index)
+                for page_index in range(session.page_count)
+            )
+        )
+        if has_pending:
+            queued = set(session.thumbnail_queue)
+            session.thumbnail_queue.extend(
+                page_index
+                for page_index in range(session.page_count)
+                if self.thumbnail_list.item(page_index).data(self.THUMBNAIL_LOADING_ROLE)
+                and page_index not in session.thumbnail_cache
+                and page_index not in queued
+            )
+            if not self._thumbnail_progress_timer.isActive():
+                self._thumbnail_progress_timer.start()
+            if not self._background_render_timer.isActive():
+                self._background_render_timer.start()
+        elif not has_pending:
+            self._thumbnail_progress_timer.stop()
 
     def _render_current_page(self, page_index: int, scroll_to_page: bool = True) -> None:
         session = self._current_session()
@@ -1869,17 +2245,24 @@ class MainWindow(QMainWindow):
 
         start = max(0, center_page - self.VIRTUAL_RENDER_RADIUS)
         end = min(session.page_count - 1, center_page + self.VIRTUAL_RENDER_RADIUS)
-        desired_pages = list(range(start, end + 1))
+        desired_pages: list[int] = []
+        for distance in range(self.VIRTUAL_RENDER_RADIUS + 1):
+            candidates = (center_page,) if distance == 0 else (center_page - distance, center_page + distance)
+            for page_index in candidates:
+                if start <= page_index <= end:
+                    desired_pages.append(page_index)
 
-        # Keep the queue focused on pages around the viewport instead of all pages.
-        session.render_queue = [page for page in session.render_queue if page in desired_pages]
+        session.render_queue = [
+            page_index for page_index in desired_pages
+            if page_index not in session.page_cache
+        ]
 
         for page_index in desired_pages:
-            if page_index in session.page_cache or page_index in session.render_queue:
+            if page_index not in session.page_cache or page_index in session.thumbnail_cache:
                 continue
-            session.render_queue.append(page_index)
+            self._set_generated_thumbnail(session, page_index, self._get_thumbnail_icon(session, page_index))
 
-        if session.render_queue and not self._background_render_timer.isActive():
+        if (session.render_queue or session.thumbnail_queue) and not self._background_render_timer.isActive():
             self._background_render_timer.start()
 
     def _evict_distant_page_cache(self, session: DocumentSession) -> None:
@@ -1905,8 +2288,12 @@ class MainWindow(QMainWindow):
 
     def _process_background_render_step(self) -> None:
         session = self._current_session()
-        if session is None or not session.render_queue:
+        if session is None:
             self._background_render_timer.stop()
+            return
+
+        if not session.render_queue:
+            self._process_thumbnail_generation_step(session)
             return
 
         page_index = session.render_queue.pop(0)
@@ -1937,10 +2324,33 @@ class MainWindow(QMainWindow):
         if self._suspend_canvas_page_sync and page_index == session.current_page:
             self._resume_canvas_page_sync()
 
-        if self.thumbnail_list.count() == session.page_count:
-            item = self.thumbnail_list.item(page_index)
-            if item is not None and item.icon().isNull():
-                item.setIcon(self._get_thumbnail_icon(session, page_index))
+        if page_index not in session.thumbnail_cache:
+            self._set_generated_thumbnail(session, page_index, self._get_thumbnail_icon(session, page_index))
+
+    def _process_thumbnail_generation_step(self, session: DocumentSession) -> None:
+        while session.thumbnail_queue and session.thumbnail_queue[0] in session.thumbnail_cache:
+            session.thumbnail_queue.pop(0)
+
+        if not session.thumbnail_queue:
+            self._background_render_timer.stop()
+            self._sync_thumbnail_progress_timer(session)
+            return
+
+        page_index = session.thumbnail_queue.pop(0)
+        try:
+            icon = self._get_thumbnail_icon(session, page_index)
+        except Exception:
+            return
+        self._set_generated_thumbnail(session, page_index, icon)
+
+    def _set_generated_thumbnail(self, session: DocumentSession, page_index: int, icon: QIcon) -> None:
+        if session is not self._current_session() or self.thumbnail_list.count() != session.page_count:
+            return
+        item = self.thumbnail_list.item(page_index)
+        if item is not None:
+            item.setIcon(icon)
+            item.setData(self.THUMBNAIL_LOADING_ROLE, False)
+        self._sync_thumbnail_progress_timer(session)
 
     def _rebuild_session_index(self) -> None:
         rebuilt: dict[int, DocumentSession] = {}
@@ -2006,6 +2416,8 @@ class MainWindow(QMainWindow):
 
         session.page_cache.pop(page_index, None)
         session.thumbnail_cache.pop(page_index, None)
+        if page_index not in session.thumbnail_queue:
+            session.thumbnail_queue.insert(0, page_index)
         if page_index in session.render_queue:
             session.render_queue.remove(page_index)
         session.render_queue.insert(0, page_index)
@@ -2019,10 +2431,14 @@ class MainWindow(QMainWindow):
         if self.thumbnail_list.count() > page_index:
             item = self.thumbnail_list.item(page_index)
             if item is not None:
-                item.setIcon(QIcon())
+                item.setIcon(self._thumbnail_progress_icon())
+                item.setData(self.THUMBNAIL_LOADING_ROLE, True)
+                self._sync_thumbnail_progress_timer(session)
 
         if not self._background_render_timer.isActive():
             self._background_render_timer.start()
+
+        self._restart_search_after_document_change(session)
 
         direction = "left" if degrees < 0 else "right"
         self.statusBar().showMessage(f"Page {page_index + 1} rotated {direction}")
@@ -2057,9 +2473,11 @@ class MainWindow(QMainWindow):
         session.page_cache.clear()
         session.thumbnail_cache.clear()
         session.render_queue.clear()
+        session.thumbnail_queue = list(range(session.page_count))
 
         self._load_thumbnails_for_current_session()
         self._rebuild_canvas_for_current_session()
+        self._restart_search_after_document_change(session)
         self.statusBar().showMessage(f"Page {page_index + 1} deleted | {session.page_count} pages remaining")
 
     def _on_thumbnail_rows_moved(self, parent, start, end, destination, row) -> None:
@@ -2087,16 +2505,19 @@ class MainWindow(QMainWindow):
         session.page_cache.clear()
         session.thumbnail_cache.clear()
         session.render_queue.clear()
+        session.thumbnail_queue = list(range(session.page_count))
         session.current_page = max(0, self.thumbnail_list.currentRow())
 
         # Reassign sequential UserRole and reset icons
         for i in range(self.thumbnail_list.count()):
             item = self.thumbnail_list.item(i)
             item.setData(Qt.ItemDataRole.UserRole, i)
+            item.setData(self.THUMBNAIL_LOADING_ROLE, True)
             item.setText(f"Page {i + 1}")
-            item.setIcon(QIcon())
+            item.setIcon(self._thumbnail_progress_icon())
 
         self._rebuild_canvas_for_current_session()
+        self._restart_search_after_document_change(session)
         self.statusBar().showMessage(f"Pages reordered | {session.page_count} pages")
 
     def _rebuild_canvas_for_current_session(self) -> None:

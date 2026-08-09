@@ -1,5 +1,6 @@
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QRectF
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget
 
 
@@ -22,6 +23,8 @@ class PdfCanvas(QWidget):
         self._suspend_scroll_notifications = False
         self._display_mode = self.DISPLAY_MODE_CONTINUOUS
         self._night_mode = False
+        self._search_highlights: dict[int, list[tuple[float, float, float, float]]] = {}
+        self._active_search_match: tuple[int, tuple[float, float, float, float]] | None = None
 
         self._container = QWidget(self)
         self._container.setObjectName("pdfCanvasContainer")
@@ -252,6 +255,37 @@ class PdfCanvas(QWidget):
     def current_page(self) -> int:
         return self._current_page
 
+    def set_search_highlights(
+        self,
+        highlights: dict[int, list[tuple[float, float, float, float]]],
+        active_match: tuple[int, tuple[float, float, float, float]] | None,
+    ) -> None:
+        affected_pages = set(self._search_highlights) | set(highlights)
+        if self._active_search_match is not None:
+            affected_pages.add(self._active_search_match[0])
+        if active_match is not None:
+            affected_pages.add(active_match[0])
+
+        self._search_highlights = {page: list(rects) for page, rects in highlights.items()}
+        self._active_search_match = active_match
+        for page_index in affected_pages:
+            if 0 <= page_index < len(self._page_images) and self._page_images[page_index] is not None:
+                self._apply_page_image(page_index)
+
+    def focus_search_match(self, page_index: int, rect: tuple[float, float, float, float]) -> None:
+        self.scroll_to_page(page_index)
+        if not (0 <= page_index < len(self._page_labels)):
+            return
+
+        label = self._page_labels[page_index]
+        match_center = label.y() + int(((rect[1] + rect[3]) / 2) * label.height())
+        scroll_bar = self._scroll_area.verticalScrollBar()
+        target_value = match_center - self._scroll_area.viewport().height() // 2
+        target_value = max(scroll_bar.minimum(), min(target_value, scroll_bar.maximum()))
+        self._suspend_scroll_notifications = True
+        scroll_bar.setValue(target_value)
+        self._suspend_scroll_notifications = False
+
     def _configure_page_context_menu(self, label: QLabel, page_index: int) -> None:
         label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         label.customContextMenuRequested.connect(
@@ -332,10 +366,47 @@ class PdfCanvas(QWidget):
             )
             base_pixmap.setDevicePixelRatio(dpr)
 
+        self._paint_search_highlights(base_pixmap, page_index)
+
         label.setText("")
         label.setPixmap(base_pixmap)
         self._style_loaded_page(label)
         label.setFixedSize(width, height)
+
+    def _paint_search_highlights(self, pixmap: QPixmap, page_index: int) -> None:
+        rects = self._search_highlights.get(page_index, [])
+        active_rect = None
+        if self._active_search_match is not None and self._active_search_match[0] == page_index:
+            active_rect = self._active_search_match[1]
+        if not rects and active_rect is None:
+            return
+
+        logical_size = pixmap.deviceIndependentSize()
+        painter = QPainter(pixmap)
+        painter.setPen(QPen(QColor(202, 138, 4, 190), 1.0))
+        painter.setBrush(QColor(250, 204, 21, 90))
+        for rect in rects:
+            painter.drawRect(
+                QRectF(
+                    rect[0] * logical_size.width(),
+                    rect[1] * logical_size.height(),
+                    (rect[2] - rect[0]) * logical_size.width(),
+                    (rect[3] - rect[1]) * logical_size.height(),
+                )
+            )
+
+        if active_rect is not None:
+            painter.setPen(QPen(QColor(234, 88, 12), 2.0))
+            painter.setBrush(QColor(251, 146, 60, 115))
+            painter.drawRect(
+                QRectF(
+                    active_rect[0] * logical_size.width(),
+                    active_rect[1] * logical_size.height(),
+                    (active_rect[2] - active_rect[0]) * logical_size.width(),
+                    (active_rect[3] - active_rect[1]) * logical_size.height(),
+                )
+            )
+        painter.end()
 
     def _scaled_size_for_page(self, page_index: int) -> tuple[int, int]:
         source_size = self._page_source_sizes[page_index]
