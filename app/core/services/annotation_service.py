@@ -11,6 +11,7 @@ class AnnotationInfo:
     content: str
     color: tuple[float, float, float]
     opacity: float
+    rects: tuple[tuple[float, float, float, float], ...]
 
 
 class AnnotationService:
@@ -74,6 +75,28 @@ class AnnotationService:
             annotation = annotation.next
         raise ValueError("Annotation no longer exists.")
 
+    def annotation_at_point(
+        self,
+        document,
+        page_index: int,
+        x_ratio: float,
+        y_ratio: float,
+        tolerance: float = 0.008,
+    ) -> AnnotationInfo | None:
+        point_x = max(0.0, min(float(x_ratio), 1.0))
+        point_y = max(0.0, min(float(y_ratio), 1.0))
+        matches = []
+        for annotation in self.list_annotations(document, page_index):
+            for rect in annotation.rects:
+                if (
+                    rect[0] - tolerance <= point_x <= rect[2] + tolerance
+                    and rect[1] - tolerance <= point_y <= rect[3] + tolerance
+                ):
+                    area = max((rect[2] - rect[0]) * (rect[3] - rect[1]), 0.0)
+                    matches.append((area, annotation))
+                    break
+        return min(matches, key=lambda match: match[0])[1] if matches else None
+
     def list_annotations(self, document, page_index: int | None = None) -> list[AnnotationInfo]:
         page_indices = range(document.page_count) if page_index is None else [page_index]
         annotations: list[AnnotationInfo] = []
@@ -84,6 +107,7 @@ class AnnotationService:
                 annotation_type = str(annotation.type[1]).lower().replace(" ", "")
                 if annotation_type in self.MARKUP_KINDS:
                     stroke = annotation.colors.get("stroke") or (1.0, 1.0, 0.0)
+                    visual_rects = self._visual_annotation_rects(page, annotation)
                     annotations.append(
                         AnnotationInfo(
                             page_index=index,
@@ -92,7 +116,32 @@ class AnnotationService:
                             content=annotation.info.get("content", ""),
                             color=tuple(stroke[:3]),
                             opacity=float(annotation.opacity),
+                            rects=visual_rects,
                         )
                     )
                 annotation = annotation.next
         return annotations
+
+    @staticmethod
+    def _visual_annotation_rects(page, annotation) -> tuple[tuple[float, float, float, float], ...]:
+        import fitz
+
+        visual_page = page.rect
+        vertices = annotation.vertices or []
+        source_rects = []
+        if len(vertices) >= 4:
+            for offset in range(0, len(vertices) - 3, 4):
+                source_rects.append(fitz.Quad(vertices[offset:offset + 4]).rect)
+        else:
+            source_rects.append(annotation.rect)
+
+        return tuple(
+            (
+                visual_rect.x0 / visual_page.width,
+                visual_rect.y0 / visual_page.height,
+                visual_rect.x1 / visual_page.width,
+                visual_rect.y1 / visual_page.height,
+            )
+            for source_rect in source_rects
+            for visual_rect in (source_rect * page.rotation_matrix,)
+        )

@@ -43,11 +43,12 @@ from app.core.commands import (
     Command,
     CommandHistory,
     DeletePageCommand,
+    DeleteAnnotationCommand,
     InsertBlankPagesCommand,
     ReorderPagesCommand,
     RotatePageCommand,
 )
-from app.core.services.annotation_service import AnnotationService
+from app.core.services.annotation_service import AnnotationInfo, AnnotationService
 from app.core.services.page_service import MergeCancelledError, MergeSource, PageService
 from app.core.services.viewer_service import SearchMatch, TextSelection, ViewerService
 from app.infra.pdf_engines.pymupdf_adapter import PyMuPDFAdapter
@@ -78,6 +79,7 @@ class DocumentSession:
     is_dirty: bool = False
     command_history: CommandHistory = field(default_factory=CommandHistory)
     text_selection: TextSelection | None = None
+    annotation_selection: AnnotationInfo | None = None
 
 
 class MainWindow(QMainWindow):
@@ -288,6 +290,21 @@ class MainWindow(QMainWindow):
         self.select_text_action.setToolTip("Select Text (Alt+T)")
         self.select_text_action.toggled.connect(self._toggle_text_selection)
 
+        self.select_annotation_action = QAction(
+            self._icon("select_annotation"), "Select Annotation", self
+        )
+        self.select_annotation_action.setCheckable(True)
+        self.select_annotation_action.setShortcut(QKeySequence("Alt+A"))
+        self.select_annotation_action.setToolTip("Select Annotation (Alt+A)")
+        self.select_annotation_action.toggled.connect(self._toggle_annotation_selection)
+
+        self.delete_annotation_action = QAction(
+            self._icon("delete_annotation"), "Delete Annotation", self
+        )
+        self.delete_annotation_action.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+        self.delete_annotation_action.setToolTip("Delete selected annotation (Delete)")
+        self.delete_annotation_action.triggered.connect(self._delete_selected_annotation)
+
         self.highlight_action = QAction(self._icon("highlight"), "Highlight", self)
         self.highlight_action.setShortcut(QKeySequence("Ctrl+Alt+H"))
         self.highlight_action.triggered.connect(
@@ -408,9 +425,11 @@ class MainWindow(QMainWindow):
         self.edit_menu.addAction(self.search_action)
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.select_text_action)
+        self.edit_menu.addAction(self.select_annotation_action)
         self.edit_menu.addAction(self.highlight_action)
         self.edit_menu.addAction(self.underline_action)
         self.edit_menu.addAction(self.strikeout_action)
+        self.edit_menu.addAction(self.delete_annotation_action)
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.rotate_left_action)
         self.edit_menu.addAction(self.rotate_right_action)
@@ -470,9 +489,11 @@ class MainWindow(QMainWindow):
 
         for action in [
             self.select_text_action,
+            self.select_annotation_action,
             self.highlight_action,
             self.underline_action,
             self.strikeout_action,
+            self.delete_annotation_action,
         ]:
             button = QToolButton(self.action_bar)
             button.setDefaultAction(action)
@@ -839,6 +860,7 @@ class MainWindow(QMainWindow):
         self.merge_pdfs_action.setEnabled(True)
         self._sync_undo_redo_actions(self._current_session())
         self.select_text_action.setEnabled(has_pages)
+        self.select_annotation_action.setEnabled(has_pages)
         self._sync_markup_actions(self._current_session())
         self.save_action.setEnabled(has_document)
         self.save_as_action.setEnabled(has_document)
@@ -916,6 +938,8 @@ class MainWindow(QMainWindow):
         self.clear_recent_action.setIcon(self._icon("clear_recent"))
         self.search_action.setIcon(self._icon("search"))
         self.select_text_action.setIcon(self._icon("select_text"))
+        self.select_annotation_action.setIcon(self._icon("select_annotation"))
+        self.delete_annotation_action.setIcon(self._icon("delete_annotation"))
         self.highlight_action.setIcon(self._icon("highlight"))
         self.underline_action.setIcon(self._icon("underline"))
         self.strikeout_action.setIcon(self._icon("strikeout"))
@@ -946,6 +970,8 @@ class MainWindow(QMainWindow):
             self.clear_recent_action,
             self.search_action,
             self.select_text_action,
+            self.select_annotation_action,
+            self.delete_annotation_action,
             self.highlight_action,
             self.underline_action,
             self.strikeout_action,
@@ -1189,7 +1215,9 @@ class MainWindow(QMainWindow):
         canvas.current_page_changed.connect(self._on_canvas_page_changed)
         canvas.page_context_requested.connect(self._show_page_context_menu)
         canvas.text_selection_requested.connect(self._on_text_selection_requested)
+        canvas.annotation_selection_requested.connect(self._on_annotation_selection_requested)
         canvas.set_text_selection_enabled(self.select_text_action.isChecked())
+        canvas.set_annotation_selection_enabled(self.select_annotation_action.isChecked())
         canvas.set_page_count(page_count, page_sizes=page_sizes)
 
         tab_name = Path(selected_path).name
@@ -1845,18 +1873,33 @@ class MainWindow(QMainWindow):
             session.text_selection is not None
             and session.text_selection.page_index == page_index
         )
+        annotation_match = self.annotation_service.annotation_at_point(
+            session.document,
+            page_index,
+            x_ratio,
+            y_ratio,
+        )
         image_match = self.pdf_adapter.image_at_point(
             session.document,
             page_index,
             x_ratio,
             y_ratio,
         )
-        if image_match is None and not has_selection:
+        if image_match is None and not has_selection and annotation_match is None:
             return
 
         menu = QMenu(self)
         markup_actions: dict[QAction, str] = {}
+        delete_annotation_action = None
+        if annotation_match is not None:
+            self._select_annotation(session, annotation_match)
+            delete_annotation_action = menu.addAction(
+                self._icon("delete_annotation"),
+                f"Delete {annotation_match.kind.title()}",
+            )
         if has_selection:
+            if delete_annotation_action is not None:
+                menu.addSeparator()
             markup_actions[menu.addAction(self._icon("highlight"), "Highlight Selection")] = AnnotationService.HIGHLIGHT
             markup_actions[menu.addAction(self._icon("underline"), "Underline Selection")] = AnnotationService.UNDERLINE
             markup_actions[menu.addAction(self._icon("strikeout"), "Strikeout Selection")] = AnnotationService.STRIKEOUT
@@ -1866,6 +1909,9 @@ class MainWindow(QMainWindow):
                 menu.addSeparator()
             extract_action = menu.addAction(self._icon("extract_image"), "Extract This Image...")
         selected_action = menu.exec(global_position)
+        if selected_action is delete_annotation_action:
+            self._delete_selected_annotation()
+            return
         if selected_action in markup_actions:
             self._apply_markup(markup_actions[selected_action])
             return
@@ -1896,12 +1942,24 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Extracted image to {destination.name}")
 
     def _toggle_text_selection(self, enabled: bool) -> None:
+        if enabled and self.select_annotation_action.isChecked():
+            self.select_annotation_action.setChecked(False)
         for session in self._sessions_by_tab_index.values():
             session.canvas.set_text_selection_enabled(enabled)
         if enabled:
             self.statusBar().showMessage("Text Select enabled · drag across text to select")
         else:
             self.statusBar().showMessage("Text Select disabled")
+
+    def _toggle_annotation_selection(self, enabled: bool) -> None:
+        if enabled and self.select_text_action.isChecked():
+            self.select_text_action.setChecked(False)
+        for session in self._sessions_by_tab_index.values():
+            session.canvas.set_annotation_selection_enabled(enabled)
+        if enabled:
+            self.statusBar().showMessage("Annotation Select enabled · click markup to select")
+        else:
+            self.statusBar().showMessage("Annotation Select disabled")
 
     def _on_text_selection_requested(
         self,
@@ -1938,6 +1996,81 @@ class MainWindow(QMainWindow):
                 f"Selected {len(selection.text.split())} word(s) on page {page_index + 1}"
             )
         self._sync_markup_actions(session)
+
+    def _on_annotation_selection_requested(
+        self,
+        page_index: int,
+        x_ratio: float,
+        y_ratio: float,
+    ) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+        annotation = self.annotation_service.annotation_at_point(
+            session.document,
+            page_index,
+            x_ratio,
+            y_ratio,
+        )
+        if annotation is None:
+            self._clear_annotation_selection(session)
+            self.statusBar().showMessage("No annotation found at this position")
+            return
+        self._select_annotation(session, annotation)
+
+    def _select_annotation(self, session: DocumentSession, annotation: AnnotationInfo) -> None:
+        self._clear_text_selection(session)
+        session.annotation_selection = annotation
+        session.current_page = annotation.page_index
+        session.canvas.set_annotation_selection(annotation.page_index, list(annotation.rects))
+        self.toggle_properties_action.setChecked(True)
+        self.properties_panel.show_annotation(annotation)
+        self._sync_markup_actions(session)
+        self.statusBar().showMessage(
+            f"Selected {annotation.kind} on page {annotation.page_index + 1}"
+        )
+
+    def _clear_annotation_selection(self, session: DocumentSession) -> None:
+        session.annotation_selection = None
+        session.canvas.clear_annotation_selection()
+        if session is self._current_session():
+            if session.text_selection is None:
+                self.properties_panel.clear_selection()
+            self._sync_markup_actions(session)
+
+    def _delete_selected_annotation(self) -> None:
+        session = self._current_session()
+        if session is None or session.annotation_selection is None:
+            self.statusBar().showMessage("Select an annotation before deleting")
+            return
+        annotation = session.annotation_selection
+        answer = QMessageBox.question(
+            self,
+            "Delete Annotation",
+            f"Delete this {annotation.kind} annotation from page {annotation.page_index + 1}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            session.command_history.execute(
+                DeleteAnnotationCommand(
+                    self.annotation_service,
+                    session.document,
+                    annotation,
+                )
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Annotation Failed", str(exc))
+            return
+        page_index = annotation.page_index
+        self._clear_annotation_selection(session)
+        self._refresh_annotated_page(session, page_index)
+        self._set_session_dirty(session, session.command_history.is_dirty)
+        self.statusBar().showMessage(
+            f"Deleted {annotation.kind} from page {page_index + 1}"
+        )
 
     def _apply_markup(self, kind: str) -> None:
         session = self._current_session()
@@ -1998,9 +2131,11 @@ class MainWindow(QMainWindow):
 
     def _sync_markup_actions(self, session: DocumentSession | None) -> None:
         has_selection = session is not None and session.text_selection is not None
+        has_annotation = session is not None and session.annotation_selection is not None
         self.highlight_action.setEnabled(has_selection)
         self.underline_action.setEnabled(has_selection)
         self.strikeout_action.setEnabled(has_selection)
+        self.delete_annotation_action.setEnabled(has_annotation)
 
     def _run_extract_current_page(self, session: DocumentSession, save_to_current: bool) -> None:
         page_number = session.current_page + 1
@@ -2336,6 +2471,9 @@ class MainWindow(QMainWindow):
         session = self._current_session()
         if session is not None:
             session.canvas.set_text_selection_enabled(self.select_text_action.isChecked())
+            session.canvas.set_annotation_selection_enabled(
+                self.select_annotation_action.isChecked()
+            )
             session.canvas.set_display_mode(self._display_mode)
             session.canvas.set_night_mode(self._night_reading_mode)
             self._queue_render_for_current_session(center_page=session.current_page)
@@ -2350,6 +2488,8 @@ class MainWindow(QMainWindow):
                 session.text_selection.page_index + 1,
                 session.text_selection.text,
             )
+        elif session is not None and session.annotation_selection is not None:
+            self.properties_panel.show_annotation(session.annotation_selection)
         else:
             self.properties_panel.clear_selection()
 
@@ -2972,6 +3112,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_after_page_command(self, session: DocumentSession, current_page: int) -> None:
         self._clear_text_selection(session)
+        self._clear_annotation_selection(session)
         session.page_count = session.document.page_count
         session.page_sizes = self.pdf_adapter.page_sizes(session.document)
         session.current_page = max(0, min(current_page, session.page_count - 1))

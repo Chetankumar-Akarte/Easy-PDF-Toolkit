@@ -1,5 +1,7 @@
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from app.core.services.annotation_service import AnnotationInfo
+
 
 class PropertiesPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -32,3 +34,13 @@ class PropertiesPanel(QWidget):
     def clear_selection(self) -> None:
         self.selection_type_label.setText("No selection")
         self.selection_details_label.setText("Select text to add PDF markup.")
+
+    def show_annotation(self, annotation: AnnotationInfo) -> None:
+        color = tuple(round(channel * 255) for channel in annotation.color)
+        content = annotation.content or "No associated text"
+        self.selection_type_label.setText(
+            f"{annotation.kind.title()} annotation · Page {annotation.page_index + 1}"
+        )
+        self.selection_details_label.setText(
+            f"Color: rgb{color}\nOpacity: {annotation.opacity:.0%}\n\n{content}"
+        )

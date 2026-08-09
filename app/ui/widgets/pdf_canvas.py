@@ -5,17 +5,33 @@ from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget
 
 class SelectablePageLabel(QLabel):
     selection_requested = Signal(int, float, float, float, float)
+    annotation_selection_requested = Signal(int, float, float)
 
     def __init__(self, page_index: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._page_index = page_index
         self._selection_enabled = False
+        self._annotation_selection_enabled = False
         self._selection_start: QPoint | None = None
 
     def set_selection_enabled(self, enabled: bool) -> None:
         self._selection_enabled = enabled
         self.setCursor(
-            Qt.CursorShape.IBeamCursor if enabled else Qt.CursorShape.ArrowCursor
+            Qt.CursorShape.IBeamCursor
+            if enabled
+            else Qt.CursorShape.PointingHandCursor
+            if self._annotation_selection_enabled
+            else Qt.CursorShape.ArrowCursor
+        )
+
+    def set_annotation_selection_enabled(self, enabled: bool) -> None:
+        self._annotation_selection_enabled = enabled
+        self.setCursor(
+            Qt.CursorShape.IBeamCursor
+            if self._selection_enabled
+            else Qt.CursorShape.PointingHandCursor
+            if enabled
+            else Qt.CursorShape.ArrowCursor
         )
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
@@ -46,6 +62,17 @@ class SelectablePageLabel(QLabel):
                 )
             event.accept()
             return
+        if self._annotation_selection_enabled and event.button() == Qt.MouseButton.LeftButton:
+            width = max(self.width(), 1)
+            height = max(self.height(), 1)
+            position = event.position()
+            self.annotation_selection_requested.emit(
+                self._page_index,
+                max(0.0, min(position.x() / width, 1.0)),
+                max(0.0, min(position.y() / height, 1.0)),
+            )
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
 
@@ -58,6 +85,7 @@ class PdfCanvas(QWidget):
     current_page_changed = Signal(int)
     page_context_requested = Signal(int, float, float, object)
     text_selection_requested = Signal(int, float, float, float, float)
+    annotation_selection_requested = Signal(int, float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -72,7 +100,9 @@ class PdfCanvas(QWidget):
         self._search_highlights: dict[int, list[tuple[float, float, float, float]]] = {}
         self._active_search_match: tuple[int, tuple[float, float, float, float]] | None = None
         self._selection_enabled = False
+        self._annotation_selection_enabled = False
         self._text_selection: tuple[int, list[tuple[float, float, float, float]]] | None = None
+        self._annotation_selection: tuple[int, list[tuple[float, float, float, float]]] | None = None
 
         self._container = QWidget(self)
         self._container.setObjectName("pdfCanvasContainer")
@@ -156,7 +186,9 @@ class PdfCanvas(QWidget):
             page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             page_label.setFixedSize(600, 400)
             page_label.set_selection_enabled(self._selection_enabled)
+            page_label.set_annotation_selection_enabled(self._annotation_selection_enabled)
             page_label.selection_requested.connect(self.text_selection_requested)
+            page_label.annotation_selection_requested.connect(self.annotation_selection_requested)
             self._configure_page_context_menu(page_label, index)
             self._style_loading_page(page_label)
             self._pages_layout.addWidget(page_label)
@@ -178,7 +210,9 @@ class PdfCanvas(QWidget):
             page_label = SelectablePageLabel(index, self._container)
             page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             page_label.set_selection_enabled(self._selection_enabled)
+            page_label.set_annotation_selection_enabled(self._annotation_selection_enabled)
             page_label.selection_requested.connect(self.text_selection_requested)
+            page_label.annotation_selection_requested.connect(self.annotation_selection_requested)
             self._configure_page_context_menu(page_label, index)
             self._style_loading_page(page_label)
             self._pages_layout.addWidget(page_label)
@@ -314,6 +348,12 @@ class PdfCanvas(QWidget):
             if isinstance(label, SelectablePageLabel):
                 label.set_selection_enabled(self._selection_enabled)
 
+    def set_annotation_selection_enabled(self, enabled: bool) -> None:
+        self._annotation_selection_enabled = bool(enabled)
+        for label in self._page_labels:
+            if isinstance(label, SelectablePageLabel):
+                label.set_annotation_selection_enabled(self._annotation_selection_enabled)
+
     def set_text_selection(
         self,
         page_index: int,
@@ -332,6 +372,27 @@ class PdfCanvas(QWidget):
             return
         page_index = self._text_selection[0]
         self._text_selection = None
+        if 0 <= page_index < len(self._page_images) and self._page_images[page_index] is not None:
+            self._apply_page_image(page_index)
+
+    def set_annotation_selection(
+        self,
+        page_index: int,
+        rects: list[tuple[float, float, float, float]],
+    ) -> None:
+        affected_pages = {page_index}
+        if self._annotation_selection is not None:
+            affected_pages.add(self._annotation_selection[0])
+        self._annotation_selection = (page_index, list(rects)) if rects else None
+        for affected_page in affected_pages:
+            if 0 <= affected_page < len(self._page_images) and self._page_images[affected_page] is not None:
+                self._apply_page_image(affected_page)
+
+    def clear_annotation_selection(self) -> None:
+        if self._annotation_selection is None:
+            return
+        page_index = self._annotation_selection[0]
+        self._annotation_selection = None
         if 0 <= page_index < len(self._page_images) and self._page_images[page_index] is not None:
             self._apply_page_image(page_index)
 
@@ -448,6 +509,7 @@ class PdfCanvas(QWidget):
 
         self._paint_search_highlights(base_pixmap, page_index)
         self._paint_text_selection(base_pixmap, page_index)
+        self._paint_annotation_selection(base_pixmap, page_index)
 
         label.setText("")
         label.setPixmap(base_pixmap)
@@ -504,6 +566,24 @@ class PdfCanvas(QWidget):
                     (rect[2] - rect[0]) * logical_size.width(),
                     (rect[3] - rect[1]) * logical_size.height(),
                 )
+            )
+        painter.end()
+
+    def _paint_annotation_selection(self, pixmap: QPixmap, page_index: int) -> None:
+        if self._annotation_selection is None or self._annotation_selection[0] != page_index:
+            return
+        logical_size = pixmap.deviceIndependentSize()
+        painter = QPainter(pixmap)
+        painter.setPen(QPen(QColor(13, 148, 136, 235), 2.0, Qt.PenStyle.DashLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for rect in self._annotation_selection[1]:
+            painter.drawRect(
+                QRectF(
+                    rect[0] * logical_size.width(),
+                    rect[1] * logical_size.height(),
+                    (rect[2] - rect[0]) * logical_size.width(),
+                    (rect[3] - rect[1]) * logical_size.height(),
+                ).adjusted(-2, -2, 2, 2)
             )
         painter.end()
 
@@ -580,6 +660,7 @@ class PdfCanvas(QWidget):
         self._page_labels = []
         self._page_source_sizes = []
         self._text_selection = None
+        self._annotation_selection = None
 
     def _capture_viewport_anchor(self) -> tuple[int, float]:
         if not self._page_labels:

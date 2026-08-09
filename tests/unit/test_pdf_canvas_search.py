@@ -72,3 +72,29 @@ def test_text_selection_mode_emits_normalized_mouse_drag() -> None:
     arguments = spy.at(0)
     assert arguments[0] == 0
     assert arguments[1:] == [0.1, 0.2, 0.5, 0.6]
+
+
+def test_annotation_selection_paints_outline_and_emits_click() -> None:
+    app = QApplication.instance() or QApplication([])
+    canvas = PdfCanvas()
+    image = QImage(100, 100, QImage.Format.Format_RGB888)
+    image.fill(QColor("white"))
+    canvas.set_document_pages([image])
+    canvas.set_annotation_selection_enabled(True)
+    canvas.set_annotation_selection(0, [(0.2, 0.2, 0.6, 0.4)])
+    canvas.show()
+    app.processEvents()
+
+    pixmap = canvas._page_labels[0].pixmap()
+    assert pixmap is not None
+    assert pixmap.toImage().pixelColor(18, 20) != QColor("white")
+
+    spy = QSignalSpy(canvas.annotation_selection_requested)
+    QTest.mouseClick(canvas._page_labels[0], Qt.MouseButton.LeftButton, pos=QPoint(40, 30))
+    assert spy.count() == 1
+    assert spy.at(0) == [0, 0.4, 0.3]
+
+    canvas.clear_annotation_selection()
+    cleared = canvas._page_labels[0].pixmap()
+    assert cleared is not None
+    assert cleared.toImage().pixelColor(18, 20) == QColor("white")
