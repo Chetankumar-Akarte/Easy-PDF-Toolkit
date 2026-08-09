@@ -19,6 +19,13 @@ class PyMuPDFAdapter:
     def page_count(self, document) -> int:
         return document.page_count
 
+    def file_page_count(self, path: str) -> int:
+        document = self.open_document(path)
+        try:
+            return self.page_count(document)
+        finally:
+            self.close_document(document)
+
     def page_sizes(self, document) -> list[tuple[int, int]]:
         sizes: list[tuple[int, int]] = []
         for page_index in range(document.page_count):

@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class MergeSource:
+    path: str
+    page_indices: tuple[int, ...]
+
+
+class MergeCancelledError(RuntimeError):
+    """Raised when a PDF merge is cancelled before completion."""
 
 
 class PageService:
@@ -42,6 +54,93 @@ class PageService:
             document.new_page(pno=page_index, width=width, height=height)
             inserted_indices.append(page_index)
         return inserted_indices
+
+    def merge_pdfs(
+        self,
+        sources: list[MergeSource],
+        output_path: str,
+        progress: Callable[[int, int, str], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> str:
+        """Merge ordered source page selections into an atomically written PDF."""
+        import fitz
+
+        if not sources:
+            raise ValueError("Select at least one PDF to merge.")
+
+        destination = Path(output_path).expanduser().resolve()
+        if destination.suffix.lower() != ".pdf":
+            destination = destination.with_suffix(".pdf")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.merging")
+
+        merged = fitz.open()
+        merged_toc: list[list] = []
+        first_metadata: dict | None = None
+        output_page_count = 0
+        try:
+            for source_number, source_spec in enumerate(sources, start=1):
+                if is_cancelled is not None and is_cancelled():
+                    raise MergeCancelledError("PDF merge cancelled.")
+
+                source_path = Path(source_spec.path).expanduser().resolve()
+                if not source_path.is_file():
+                    raise FileNotFoundError(f"PDF not found: {source_path}")
+
+                source = fitz.open(str(source_path))
+                try:
+                    page_indices = list(source_spec.page_indices)
+                    if not page_indices:
+                        raise ValueError(f"No pages selected from {source_path.name}.")
+                    if len(set(page_indices)) != len(page_indices):
+                        raise ValueError(f"Duplicate pages selected from {source_path.name}.")
+                    if any(index < 0 or index >= source.page_count for index in page_indices):
+                        raise ValueError(f"Page selection is outside {source_path.name}.")
+
+                    if first_metadata is None:
+                        first_metadata = dict(source.metadata)
+
+                    source_to_output: dict[int, int] = {}
+                    for page_index in page_indices:
+                        if is_cancelled is not None and is_cancelled():
+                            raise MergeCancelledError("PDF merge cancelled.")
+                        merged.insert_pdf(source, from_page=page_index, to_page=page_index)
+                        output_page_count += 1
+                        source_to_output[page_index + 1] = output_page_count
+
+                    previous_level = 0
+                    for item in source.get_toc(simple=True):
+                        level, title, source_page = item[:3]
+                        output_page = source_to_output.get(source_page)
+                        if output_page is None:
+                            continue
+                        normalized_level = 1 if previous_level == 0 else min(level, previous_level + 1)
+                        merged_toc.append([normalized_level, title, output_page])
+                        previous_level = normalized_level
+                finally:
+                    source.close()
+
+                if progress is not None:
+                    progress(source_number, len(sources), source_path.name)
+
+            if merged.page_count == 0:
+                raise ValueError("The selected sources contain no pages.")
+            if first_metadata:
+                merged.set_metadata(first_metadata)
+            if merged_toc:
+                merged.set_toc(merged_toc)
+
+            if temporary.exists():
+                temporary.unlink()
+            merged.save(str(temporary), garbage=3, deflate=True)
+            if is_cancelled is not None and is_cancelled():
+                raise MergeCancelledError("PDF merge cancelled.")
+            temporary.replace(destination)
+            return str(destination)
+        finally:
+            merged.close()
+            if temporary.exists():
+                temporary.unlink()
 
     def parse_page_ranges(self, page_range_text: str, page_count: int) -> list[int]:
         """Parse 1-based ranges like `1,3,5-7` into 0-based unique page indices."""

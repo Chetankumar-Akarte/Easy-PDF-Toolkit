@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 import fitz
 
-from app.core.services.page_service import PageService
+from app.core.services.page_service import MergeCancelledError, MergeSource, PageService
 
 
 @pytest.fixture()
@@ -111,6 +111,74 @@ class TestInsertBlankPages:
             assert document[1].rect.height == pytest.approx(792)
         finally:
             document.close()
+
+
+class TestMergePdfs:
+    def test_merges_ordered_page_selections_and_preserves_document_data(
+        self,
+        svc: PageService,
+        tmp_path,
+    ) -> None:
+        first_path = tmp_path / "first.pdf"
+        second_path = tmp_path / "second.pdf"
+        output_path = tmp_path / "merged.pdf"
+
+        first = fitz.open()
+        first.new_page(width=300, height=400).insert_text((20, 30), "first-1")
+        first.new_page(width=310, height=410).insert_text((20, 30), "first-2")
+        first.set_metadata({"title": "Merged title", "author": "Easy PDF"})
+        first.set_toc([[1, "First chapter", 2]])
+        first.save(first_path)
+        first.close()
+
+        second = fitz.open()
+        second.new_page(width=500, height=600).insert_text((20, 30), "second-1")
+        second.new_page(width=510, height=610).insert_text((20, 30), "second-2")
+        second.save(second_path)
+        second.close()
+
+        updates: list[tuple[int, int, str]] = []
+        result = svc.merge_pdfs(
+            [
+                MergeSource(str(second_path), (1, 0)),
+                MergeSource(str(first_path), (1,)),
+            ],
+            str(output_path),
+            progress=lambda current, total, name: updates.append((current, total, name)),
+        )
+
+        assert result == str(output_path.resolve())
+        merged = fitz.open(output_path)
+        try:
+            assert [merged[index].get_text().strip() for index in range(3)] == [
+                "second-2",
+                "second-1",
+                "first-2",
+            ]
+            assert merged[0].rect.width == pytest.approx(510)
+            assert merged[2].rect.height == pytest.approx(410)
+            assert merged.metadata["title"] == ""
+            assert merged.get_toc() == [[1, "First chapter", 3]]
+        finally:
+            merged.close()
+        assert updates == [(1, 2, "second.pdf"), (2, 2, "first.pdf")]
+
+    def test_cancelled_merge_leaves_no_output(self, svc: PageService, tmp_path) -> None:
+        source_path = tmp_path / "source.pdf"
+        output_path = tmp_path / "cancelled.pdf"
+        source = fitz.open()
+        source.new_page()
+        source.save(source_path)
+        source.close()
+
+        with pytest.raises(MergeCancelledError):
+            svc.merge_pdfs(
+                [MergeSource(str(source_path), (0,))],
+                str(output_path),
+                is_cancelled=lambda: True,
+            )
+
+        assert not output_path.exists()
 
     @pytest.mark.parametrize(
         ("insertion_index", "width", "height", "count"),

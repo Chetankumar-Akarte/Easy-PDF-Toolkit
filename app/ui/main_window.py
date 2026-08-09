@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QGraphicsOpacityEffect,
     QSpinBox,
@@ -37,12 +38,20 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.services.document_service import DocumentService
-from app.core.services.page_service import PageService
+from app.core.commands import (
+    Command,
+    CommandHistory,
+    DeletePageCommand,
+    InsertBlankPagesCommand,
+    ReorderPagesCommand,
+    RotatePageCommand,
+)
+from app.core.services.page_service import MergeCancelledError, MergeSource, PageService
 from app.core.services.viewer_service import SearchMatch, ViewerService
 from app.infra.pdf_engines.pymupdf_adapter import PyMuPDFAdapter
 from app.infra.storage.recent_files_repo import RecentFilesRepository
 from app.infra.storage.settings_repo import AppSettings, SettingsRepository
-from app.ui.dialogs import InsertBlankPageDialog, SplitExtractDialog
+from app.ui.dialogs import InsertBlankPageDialog, MergePdfDialog, SplitExtractDialog
 from app.ui.panels.properties_panel import PropertiesPanel
 from app.ui.theme import ThemeColors, build_qss, get_theme, make_palette
 from app.ui.widgets.pdf_canvas import PdfCanvas
@@ -65,6 +74,7 @@ class DocumentSession:
     search_matches: list[SearchMatch] = field(default_factory=list)
     active_search_match: int = -1
     is_dirty: bool = False
+    command_history: CommandHistory = field(default_factory=CommandHistory)
 
 
 class MainWindow(QMainWindow):
@@ -259,9 +269,24 @@ class MainWindow(QMainWindow):
         self.clear_recent_action = QAction(self._icon("clear_recent"), "Clear Recent History", self)
         self.clear_recent_action.triggered.connect(self._clear_recent_history)
 
+        self.merge_pdfs_action = QAction(self._icon("merge_pdf"), "Merge PDFs...", self)
+        self.merge_pdfs_action.setShortcut(QKeySequence("Ctrl+Shift+M"))
+        self.merge_pdfs_action.setToolTip("Merge PDFs (Ctrl+Shift+M)")
+        self.merge_pdfs_action.triggered.connect(self._open_merge_pdf_dialog)
+
         self.search_action = QAction(self._icon("search"), "Find...", self)
         self.search_action.setShortcut(QKeySequence.StandardKey.Find)
         self.search_action.triggered.connect(self._show_search_bar)
+
+        self.undo_action = QAction(self._icon("undo"), "Undo", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.triggered.connect(self._undo_current_document)
+
+        self.redo_action = QAction(self._icon("redo"), "Redo", self)
+        self.redo_action.setShortcuts(
+            [QKeySequence.StandardKey.Redo, QKeySequence("Ctrl+Shift+Z")]
+        )
+        self.redo_action.triggered.connect(self._redo_current_document)
 
         self.rotate_left_action = QAction(self._icon("rotate_left"), "Rotate Left", self)
         self.rotate_left_action.setShortcut(QKeySequence("Ctrl+Alt+Left"))
@@ -341,6 +366,7 @@ class MainWindow(QMainWindow):
 
         self.file_menu = self.menuBar().addMenu("File")
         self.file_menu.addAction(self.open_action)
+        self.file_menu.addAction(self.merge_pdfs_action)
         self.file_menu.addAction(self.close_action)
         self.file_menu.addAction(self.clear_recent_action)
         self.file_menu.addSeparator()
@@ -350,6 +376,9 @@ class MainWindow(QMainWindow):
         self.file_menu.addAction(self.exit_action)
 
         self.edit_menu = self.menuBar().addMenu("Edit")
+        self.edit_menu.addAction(self.undo_action)
+        self.edit_menu.addAction(self.redo_action)
+        self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.search_action)
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.rotate_left_action)
@@ -401,6 +430,13 @@ class MainWindow(QMainWindow):
         file_separator.setFixedHeight(24)
         action_bar_layout.addWidget(file_separator)
 
+        for action in [self.undo_action, self.redo_action]:
+            button = QToolButton(self.action_bar)
+            button.setDefaultAction(action)
+            button.setToolTip(action.text())
+            self._style_action_bar_button(button)
+            action_bar_layout.addWidget(button)
+
         for action in [
             self.rotate_left_action,
             self.rotate_right_action,
@@ -442,6 +478,12 @@ class MainWindow(QMainWindow):
         split_separator.setFrameShadow(QFrame.Shadow.Sunken)
         split_separator.setFixedHeight(24)
         action_bar_layout.addWidget(split_separator)
+
+        self.merge_pdfs_button = QToolButton(self.action_bar)
+        self.merge_pdfs_button.setDefaultAction(self.merge_pdfs_action)
+        self.merge_pdfs_button.setToolTip(self.merge_pdfs_action.toolTip())
+        self._style_action_bar_button(self.merge_pdfs_button)
+        action_bar_layout.addWidget(self.merge_pdfs_button)
 
         self.split_extract_button = QToolButton(self.action_bar)
         self.split_extract_button.setDefaultAction(self.split_extract_action)
@@ -751,6 +793,8 @@ class MainWindow(QMainWindow):
         has_document = self._current_session() is not None
         has_pages = has_document and page_count > 0
         self.close_action.setEnabled(has_document)
+        self.merge_pdfs_action.setEnabled(True)
+        self._sync_undo_redo_actions(self._current_session())
         self.save_action.setEnabled(has_document)
         self.save_as_action.setEnabled(has_document)
         self.rotate_left_action.setEnabled(has_pages)
@@ -814,11 +858,14 @@ class MainWindow(QMainWindow):
 
     def _refresh_theme_icons(self) -> None:
         self.open_action.setIcon(self._icon("open_file"))
+        self.merge_pdfs_action.setIcon(self._icon("merge_pdf"))
         self.close_action.setIcon(self._icon("close_file"))
         self.save_action.setIcon(self._icon("save_file"))
         self.save_as_action.setIcon(self._icon("save_as"))
         self.clear_recent_action.setIcon(self._icon("clear_recent"))
         self.search_action.setIcon(self._icon("search"))
+        self.undo_action.setIcon(self._icon("undo"))
+        self.redo_action.setIcon(self._icon("redo"))
         self.rotate_left_action.setIcon(self._icon("rotate_left"))
         self.rotate_right_action.setIcon(self._icon("rotate_right"))
         self.delete_page_action.setIcon(self._icon("delete_page"))
@@ -837,11 +884,14 @@ class MainWindow(QMainWindow):
 
         for action in (
             self.open_action,
+            self.merge_pdfs_action,
             self.close_action,
             self.save_action,
             self.save_as_action,
             self.clear_recent_action,
             self.search_action,
+            self.undo_action,
+            self.redo_action,
             self.rotate_left_action,
             self.rotate_right_action,
             self.delete_page_action,
@@ -966,6 +1016,86 @@ class MainWindow(QMainWindow):
         if not selected:
             return
         self._open_document_by_path(selected)
+
+    def _open_merge_pdf_dialog(self) -> None:
+        session = self._current_session()
+        initial_paths = [session.path] if session is not None else []
+        dialog = MergePdfDialog(
+            page_count_loader=self.pdf_adapter.file_page_count,
+            theme=self._theme,
+            initial_paths=initial_paths,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        request = dialog.build_request()
+        sources: list[MergeSource] = []
+        try:
+            for source in request.sources:
+                range_text = source.page_range_text.strip()
+                page_indices = (
+                    list(range(source.page_count))
+                    if range_text.lower() == "all"
+                    else self.page_service.parse_page_ranges(range_text, source.page_count)
+                )
+                sources.append(MergeSource(source.path, tuple(page_indices)))
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Page Range", str(exc))
+            return
+
+        output_path = Path(request.output_path).expanduser().resolve()
+        if output_path.suffix.lower() != ".pdf":
+            output_path = output_path.with_suffix(".pdf")
+        if output_path.exists():
+            answer = QMessageBox.question(
+                self,
+                "Overwrite Merged PDF",
+                f"{output_path.name} already exists.\nDo you want to overwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.statusBar().showMessage("Merge cancelled")
+                return
+
+        progress_dialog = QProgressDialog("Preparing merge...", "Cancel", 0, len(sources), self)
+        progress_dialog.setWindowTitle("Merging PDFs")
+        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setValue(0)
+
+        def update_progress(current: int, total: int, name: str) -> None:
+            progress_dialog.setMaximum(total)
+            progress_dialog.setLabelText(f"Merged {name} ({current} of {total})")
+            progress_dialog.setValue(current)
+            QApplication.processEvents()
+
+        try:
+            merged_path = self.page_service.merge_pdfs(
+                sources,
+                str(output_path),
+                progress=update_progress,
+                is_cancelled=progress_dialog.wasCanceled,
+            )
+        except MergeCancelledError:
+            self.statusBar().showMessage("Merge cancelled")
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Merge Failed", f"Could not merge PDFs:\n{exc}")
+            return
+        finally:
+            progress_dialog.close()
+
+        self.recent_files_repo.add(merged_path)
+        self._settings.last_open_dir = str(Path(merged_path).parent)
+        self.settings_repo.save(self._settings)
+        if request.open_result:
+            self._open_document_by_path(merged_path)
+        self.statusBar().showMessage(
+            f"Merged {len(sources)} PDFs into {Path(merged_path).name}"
+        )
 
     def _open_document_by_path(self, selected: str) -> None:
         selected_path = str(Path(selected).resolve())
@@ -1293,6 +1423,7 @@ class MainWindow(QMainWindow):
             return False
 
         session.path = saved_path
+        session.command_history.mark_clean()
         self._set_session_dirty(session, False)
         self.recent_files_repo.add(saved_path)
         self._settings.last_open_dir = str(Path(saved_path).parent)
@@ -1343,6 +1474,7 @@ class MainWindow(QMainWindow):
             return
 
         session.path = saved_path
+        session.command_history.mark_clean()
         self._set_session_dirty(session, False)
         tab_index = self.tab_widget.currentIndex()
         if tab_index >= 0:
@@ -1545,31 +1677,23 @@ class MainWindow(QMainWindow):
 
         request = dialog.build_request()
         try:
-            inserted_indices = self.page_service.insert_blank_pages(
+            command = InsertBlankPagesCommand(
+                self.page_service,
                 session.document,
-                insertion_index=request.insertion_index,
-                width=request.width,
-                height=request.height,
-                count=request.count,
+                request.insertion_index,
+                request.width,
+                request.height,
+                request.count,
             )
-            session.page_count = session.document.page_count
-            session.page_sizes = self.pdf_adapter.page_sizes(session.document)
+            session.command_history.execute(command)
         except Exception as exc:
             QMessageBox.critical(self, "Insert Blank Pages Failed", f"Could not insert pages:\n{exc}")
             return
 
-        session.current_page = inserted_indices[0]
-        session.page_cache.clear()
-        session.thumbnail_cache.clear()
-        session.render_queue.clear()
-        session.thumbnail_queue = list(range(session.page_count))
-        self._set_session_dirty(session, True)
-        self._load_thumbnails_for_current_session()
-        self._rebuild_canvas_for_current_session()
-        self._restart_search_after_document_change(session)
+        self._refresh_after_page_command(session, request.insertion_index)
         page_word = "page" if request.count == 1 else "pages"
         self.statusBar().showMessage(
-            f"Inserted {request.count} blank {page_word} at page {inserted_indices[0] + 1}"
+            f"Inserted {request.count} blank {page_word} at page {request.insertion_index + 1}"
         )
 
     def _open_split_extract_dialog(self) -> None:
@@ -2033,6 +2157,7 @@ class MainWindow(QMainWindow):
         else:
             self._sync_document_actions(page_count=0)
         self._sync_search_ui(session)
+        self._sync_undo_redo_actions(session)
 
     def _on_thumbnail_selected(self, page_index: int) -> None:
         if page_index < 0:
@@ -2556,38 +2681,14 @@ class MainWindow(QMainWindow):
         if session is None:
             return
         try:
-            self.page_service.rotate_page(session.document, page_index, degrees)
-            session.page_sizes = self.pdf_adapter.page_sizes(session.document)
+            session.command_history.execute(
+                RotatePageCommand(self.page_service, session.document, page_index, degrees)
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Rotate Failed", f"Could not rotate page:\n{exc}")
             return
 
-        session.page_cache.pop(page_index, None)
-        session.thumbnail_cache.pop(page_index, None)
-        if page_index not in session.thumbnail_queue:
-            session.thumbnail_queue.insert(0, page_index)
-        if page_index in session.render_queue:
-            session.render_queue.remove(page_index)
-        session.render_queue.insert(0, page_index)
-
-        if page_index == session.current_page:
-            # Rotating the active page changes its aspect ratio, so reapply fit-to-width
-            # on the next render to keep the page properly sized in the viewport.
-            session.initial_fit_applied = False
-            self._suspend_canvas_page_sync = True
-
-        if self.thumbnail_list.count() > page_index:
-            item = self.thumbnail_list.item(page_index)
-            if item is not None:
-                item.setIcon(self._thumbnail_progress_icon())
-                item.setData(self.THUMBNAIL_LOADING_ROLE, True)
-                self._sync_thumbnail_progress_timer(session)
-
-        if not self._background_render_timer.isActive():
-            self._background_render_timer.start()
-
-        self._set_session_dirty(session, True)
-        self._restart_search_after_document_change(session)
+        self._refresh_after_page_command(session, page_index)
 
         direction = "left" if degrees < 0 else "right"
         self.statusBar().showMessage(f"Page {page_index + 1} rotated {direction}")
@@ -2611,23 +2712,14 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.page_service.delete_page(session.document, page_index)
-            session.page_sizes = self.pdf_adapter.page_sizes(session.document)
+            session.command_history.execute(
+                DeletePageCommand(self.page_service, session.document, page_index)
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Delete Failed", f"Could not delete page:\n{exc}")
             return
 
-        session.page_count -= 1
-        session.current_page = min(session.current_page, session.page_count - 1)
-        session.page_cache.clear()
-        session.thumbnail_cache.clear()
-        session.render_queue.clear()
-        session.thumbnail_queue = list(range(session.page_count))
-
-        self._load_thumbnails_for_current_session()
-        self._rebuild_canvas_for_current_session()
-        self._set_session_dirty(session, True)
-        self._restart_search_after_document_change(session)
+        self._refresh_after_page_command(session, min(page_index, session.document.page_count - 1))
         self.statusBar().showMessage(f"Page {page_index + 1} deleted | {session.page_count} pages remaining")
 
     def _on_thumbnail_rows_moved(self, parent, start, end, destination, row) -> None:
@@ -2645,31 +2737,74 @@ class MainWindow(QMainWindow):
             return  # no actual change
 
         try:
-            self.page_service.reorder_pages(session.document, new_order)
-            session.page_sizes = self.pdf_adapter.page_sizes(session.document)
+            session.command_history.execute(
+                ReorderPagesCommand(self.page_service, session.document, new_order)
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Reorder Failed", f"Could not reorder pages:\n{exc}")
             self._load_thumbnails_for_current_session()
             return
 
+        self._refresh_after_page_command(session, max(0, self.thumbnail_list.currentRow()))
+        self.statusBar().showMessage(f"Pages reordered | {session.page_count} pages")
+
+    def _undo_current_document(self) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+        try:
+            command = session.command_history.undo()
+        except Exception as exc:
+            QMessageBox.critical(self, "Undo Failed", f"Could not undo the last action:\n{exc}")
+            return
+        if command is None:
+            return
+        self._refresh_after_page_command(session, session.current_page)
+        self.statusBar().showMessage(f"Undid {command.description}")
+
+    def _redo_current_document(self) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+        try:
+            command = session.command_history.redo()
+        except Exception as exc:
+            QMessageBox.critical(self, "Redo Failed", f"Could not redo the next action:\n{exc}")
+            return
+        if command is None:
+            return
+        self._refresh_after_page_command(session, session.current_page)
+        self.statusBar().showMessage(f"Redid {command.description}")
+
+    def _refresh_after_page_command(self, session: DocumentSession, current_page: int) -> None:
+        session.page_count = session.document.page_count
+        session.page_sizes = self.pdf_adapter.page_sizes(session.document)
+        session.current_page = max(0, min(current_page, session.page_count - 1))
         session.page_cache.clear()
         session.thumbnail_cache.clear()
         session.render_queue.clear()
         session.thumbnail_queue = list(range(session.page_count))
-        session.current_page = max(0, self.thumbnail_list.currentRow())
-
-        # Reassign sequential UserRole and reset icons
-        for i in range(self.thumbnail_list.count()):
-            item = self.thumbnail_list.item(i)
-            item.setData(Qt.ItemDataRole.UserRole, i)
-            item.setData(self.THUMBNAIL_LOADING_ROLE, True)
-            item.setText(f"Page {i + 1}")
-            item.setIcon(self._thumbnail_progress_icon())
-
+        self._set_session_dirty(session, session.command_history.is_dirty)
+        self._load_thumbnails_for_current_session()
         self._rebuild_canvas_for_current_session()
-        self._set_session_dirty(session, True)
         self._restart_search_after_document_change(session)
-        self.statusBar().showMessage(f"Pages reordered | {session.page_count} pages")
+
+    def _sync_undo_redo_actions(self, session: DocumentSession | None) -> None:
+        history = session.command_history if session is not None else None
+        can_undo = history is not None and history.can_undo
+        can_redo = history is not None and history.can_redo
+        undo_description = history.undo_description if history is not None else ""
+        redo_description = history.redo_description if history is not None else ""
+        self.undo_action.setEnabled(can_undo)
+        self.redo_action.setEnabled(can_redo)
+        self.undo_action.setText(f"Undo {undo_description}" if undo_description else "Undo")
+        self.redo_action.setText(f"Redo {redo_description}" if redo_description else "Redo")
+        self.undo_action.setToolTip(
+            f"Undo {undo_description} (Ctrl+Z)" if undo_description else "Undo (Ctrl+Z)"
+        )
+        self.redo_action.setToolTip(
+            f"Redo {redo_description} (Ctrl+Shift+Z)" if redo_description else "Redo (Ctrl+Shift+Z)"
+        )
 
     def _rebuild_canvas_for_current_session(self) -> None:
         """Reset the canvas to loading state and re-queue background rendering."""
@@ -2690,3 +2825,4 @@ class MainWindow(QMainWindow):
                 marker = " *" if dirty else ""
                 self.tab_widget.setTabText(tab_index, f"{Path(session.path).name}{marker}")
                 break
+            self._sync_undo_redo_actions(session if session is self._current_session() else self._current_session())

@@ -25,18 +25,18 @@ A desktop-first, fully offline PDF toolkit built with Python and PySide6. View, 
 - **Reading Modes** — Light / dark app themes and Night Reading Mode (PDF invert) with quick toggle
 - **Zoom Controls** — Zoom in / out / reset with customizable level, viewport anchor preserved on zoom
 - **Text Search** — Ribbon and `Ctrl+F` access, case-insensitive document search with debounced page-by-page scanning, all-match highlights, active-result focus, wraparound navigation, per-tab state, and no-results feedback
-- **File Operations** — Open, Save (incremental), Save As with overwrite confirmation, Close tab
+- **File Operations** — Open, Save (incremental), Save As with overwrite confirmation, Close tab, and Merge PDFs with ordered inputs, per-file page ranges, progress/cancellation, overwrite safety, and automatic result opening
 - **Page Tools** — Rotate left/right, delete, reorder, and insert 1–100 blank pages before/after the current page using current/A4/Letter/Legal sizes and portrait/landscape orientation; Split / Extract Pages workflow supports current page, custom ranges, and split by size
+- **Undo / Redo** — Per-document command history for rotate, delete, reorder, and blank-page insertion with saved-state-aware dirty markers
 - **Image Extraction** — Export all unique embedded images from the open PDF, or right-click a displayed image to extract it individually in its original detected format
 - **Recent Documents** — Welcome screen lists last 10 opened files sorted by most recently opened; click to reopen; missing files are cleaned up automatically; clear history action included
 - **Persistent Settings** — Window size, position, and last-used folder remembered between launches
-- **Keyboard Shortcuts** — `Ctrl+F` Find, `Enter` / `Shift+Enter` next/previous match, `Esc` close search, `Ctrl+Shift+B` Insert Blank Pages, `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit
+- **Keyboard Shortcuts** — `Ctrl+Z` Undo, `Ctrl+Shift+Z` Redo, `Ctrl+F` Find, `Enter` / `Shift+Enter` next/previous match, `Esc` close search, `Ctrl+Shift+M` Merge PDFs, `Ctrl+Shift+B` Insert Blank Pages, `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit
 - **About Dialog** — Help > About with app metadata, runtime details, and repository link
 
 ### Roadmap
 
 - Rendering parity polish — final quality alignment with reference viewer in all zoom/night scenarios
-- Page operations — merge PDFs
 - Annotations — text, highlight, underline, strikeout, sticky note, freehand draw
 - Overlay editing — add text boxes, images, shapes, stamps, signatures
 - Utilities — watermark, page numbering
@@ -44,7 +44,6 @@ A desktop-first, fully offline PDF toolkit built with Python and PySide6. View, 
 - Batch tools — merge, split, compress, watermark, OCR across multiple files
 - Forms — fill and flatten PDF forms
 - Password — protect and remove (authorized flow only)
-- Undo / redo command history
 
 ---
 

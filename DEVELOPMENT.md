@@ -14,6 +14,6 @@ Keep UI code in app/ui, business rules in app/core, and external integrations in
 ## Immediate Backlog
 
 1. Introduce dependency container for services.
-2. Implement document model and dirty state sync.
-3. Wire toolbar actions to service layer.
-4. Add smoke tests for app shell launch and file open flow.
+2. Add autosave snapshots and crash recovery on top of the document dirty-state model.
+3. Implement annotation commands using the existing per-document command history.
+4. Add smoke tests for packaged app launch and file open flow.

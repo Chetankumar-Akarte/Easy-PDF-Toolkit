@@ -117,6 +117,20 @@ def test_insert_workflow_rebuilds_marks_dirty_saves_and_protects_close(
     assert session.render_queue[0] == 1
     assert session.is_dirty
     assert window.tab_widget.tabText(window.tab_widget.currentIndex()).endswith(" *")
+    assert window.undo_action.isEnabled()
+    assert window.undo_action.text() == "Undo Insert 2 Blank Pages"
+
+    window.undo_action.trigger()
+    assert session.page_count == 2
+    assert session.document[0].get_text().strip() == "first"
+    assert session.document[1].get_text().strip() == "second"
+    assert not session.is_dirty
+    assert window.redo_action.isEnabled()
+
+    window.redo_action.trigger()
+    assert session.page_count == 4
+    assert session.document[1].get_text() == ""
+    assert session.is_dirty
 
     assert window._save_session(session)
     assert not session.is_dirty
