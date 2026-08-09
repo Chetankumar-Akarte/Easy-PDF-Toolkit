@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QInputDialog,
     QProgressDialog,
     QPushButton,
     QGraphicsOpacityEffect,
@@ -40,10 +41,12 @@ from PySide6.QtWidgets import (
 from app.core.services.document_service import DocumentService
 from app.core.commands import (
     AddMarkupAnnotationCommand,
+    AddStickyNoteAnnotationCommand,
     Command,
     CommandHistory,
     DeletePageCommand,
     DeleteAnnotationCommand,
+    EditStickyNoteCommand,
     InsertBlankPagesCommand,
     ReorderPagesCommand,
     RotatePageCommand,
@@ -305,6 +308,21 @@ class MainWindow(QMainWindow):
         self.delete_annotation_action.setToolTip("Delete selected annotation (Delete)")
         self.delete_annotation_action.triggered.connect(self._delete_selected_annotation)
 
+        self.add_sticky_note_action = QAction(
+            self._icon("sticky_note"), "Add Sticky Note", self
+        )
+        self.add_sticky_note_action.setCheckable(True)
+        self.add_sticky_note_action.setShortcut(QKeySequence("Alt+N"))
+        self.add_sticky_note_action.setToolTip("Add Sticky Note (Alt+N)")
+        self.add_sticky_note_action.toggled.connect(self._toggle_sticky_note_mode)
+
+        self.edit_sticky_note_action = QAction(
+            self._icon("edit_sticky_note"), "Edit Sticky Note", self
+        )
+        self.edit_sticky_note_action.setShortcut(QKeySequence("Ctrl+Alt+N"))
+        self.edit_sticky_note_action.setToolTip("Edit selected sticky note")
+        self.edit_sticky_note_action.triggered.connect(self._edit_selected_sticky_note)
+
         self.highlight_action = QAction(self._icon("highlight"), "Highlight", self)
         self.highlight_action.setShortcut(QKeySequence("Ctrl+Alt+H"))
         self.highlight_action.triggered.connect(
@@ -426,9 +444,11 @@ class MainWindow(QMainWindow):
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.select_text_action)
         self.edit_menu.addAction(self.select_annotation_action)
+        self.edit_menu.addAction(self.add_sticky_note_action)
         self.edit_menu.addAction(self.highlight_action)
         self.edit_menu.addAction(self.underline_action)
         self.edit_menu.addAction(self.strikeout_action)
+        self.edit_menu.addAction(self.edit_sticky_note_action)
         self.edit_menu.addAction(self.delete_annotation_action)
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.rotate_left_action)
@@ -490,9 +510,11 @@ class MainWindow(QMainWindow):
         for action in [
             self.select_text_action,
             self.select_annotation_action,
+            self.add_sticky_note_action,
             self.highlight_action,
             self.underline_action,
             self.strikeout_action,
+            self.edit_sticky_note_action,
             self.delete_annotation_action,
         ]:
             button = QToolButton(self.action_bar)
@@ -861,6 +883,7 @@ class MainWindow(QMainWindow):
         self._sync_undo_redo_actions(self._current_session())
         self.select_text_action.setEnabled(has_pages)
         self.select_annotation_action.setEnabled(has_pages)
+        self.add_sticky_note_action.setEnabled(has_pages)
         self._sync_markup_actions(self._current_session())
         self.save_action.setEnabled(has_document)
         self.save_as_action.setEnabled(has_document)
@@ -939,6 +962,8 @@ class MainWindow(QMainWindow):
         self.search_action.setIcon(self._icon("search"))
         self.select_text_action.setIcon(self._icon("select_text"))
         self.select_annotation_action.setIcon(self._icon("select_annotation"))
+        self.add_sticky_note_action.setIcon(self._icon("sticky_note"))
+        self.edit_sticky_note_action.setIcon(self._icon("edit_sticky_note"))
         self.delete_annotation_action.setIcon(self._icon("delete_annotation"))
         self.highlight_action.setIcon(self._icon("highlight"))
         self.underline_action.setIcon(self._icon("underline"))
@@ -971,6 +996,8 @@ class MainWindow(QMainWindow):
             self.search_action,
             self.select_text_action,
             self.select_annotation_action,
+            self.add_sticky_note_action,
+            self.edit_sticky_note_action,
             self.delete_annotation_action,
             self.highlight_action,
             self.underline_action,
@@ -1216,8 +1243,10 @@ class MainWindow(QMainWindow):
         canvas.page_context_requested.connect(self._show_page_context_menu)
         canvas.text_selection_requested.connect(self._on_text_selection_requested)
         canvas.annotation_selection_requested.connect(self._on_annotation_selection_requested)
+        canvas.sticky_note_requested.connect(self._on_sticky_note_requested)
         canvas.set_text_selection_enabled(self.select_text_action.isChecked())
         canvas.set_annotation_selection_enabled(self.select_annotation_action.isChecked())
+        canvas.set_sticky_note_enabled(self.add_sticky_note_action.isChecked())
         canvas.set_page_count(page_count, page_sizes=page_sizes)
 
         tab_name = Path(selected_path).name
@@ -1885,30 +1914,40 @@ class MainWindow(QMainWindow):
             x_ratio,
             y_ratio,
         )
-        if image_match is None and not has_selection and annotation_match is None:
-            return
-
         menu = QMenu(self)
+        add_sticky_here_action = menu.addAction(self._icon("sticky_note"), "Add Sticky Note Here...")
         markup_actions: dict[QAction, str] = {}
         delete_annotation_action = None
+        edit_sticky_note_action = None
         if annotation_match is not None:
             self._select_annotation(session, annotation_match)
             delete_annotation_action = menu.addAction(
                 self._icon("delete_annotation"),
-                f"Delete {annotation_match.kind.title()}",
+                f"Delete {self._annotation_kind_label(annotation_match.kind)}",
             )
+            if annotation_match.kind == AnnotationService.STICKY_NOTE:
+                edit_sticky_note_action = menu.addAction(
+                    self._icon("edit_sticky_note"),
+                    "Edit Sticky Note...",
+                )
         if has_selection:
-            if delete_annotation_action is not None:
+            if delete_annotation_action is not None or edit_sticky_note_action is not None:
                 menu.addSeparator()
             markup_actions[menu.addAction(self._icon("highlight"), "Highlight Selection")] = AnnotationService.HIGHLIGHT
             markup_actions[menu.addAction(self._icon("underline"), "Underline Selection")] = AnnotationService.UNDERLINE
             markup_actions[menu.addAction(self._icon("strikeout"), "Strikeout Selection")] = AnnotationService.STRIKEOUT
         extract_action = None
         if image_match is not None:
-            if has_selection:
+            if has_selection or annotation_match is not None:
                 menu.addSeparator()
             extract_action = menu.addAction(self._icon("extract_image"), "Extract This Image...")
         selected_action = menu.exec(global_position)
+        if selected_action is add_sticky_here_action:
+            self._add_sticky_note_at_point(session, page_index, x_ratio, y_ratio)
+            return
+        if selected_action is edit_sticky_note_action:
+            self._edit_selected_sticky_note()
+            return
         if selected_action is delete_annotation_action:
             self._delete_selected_annotation()
             return
@@ -1944,6 +1983,8 @@ class MainWindow(QMainWindow):
     def _toggle_text_selection(self, enabled: bool) -> None:
         if enabled and self.select_annotation_action.isChecked():
             self.select_annotation_action.setChecked(False)
+        if enabled and self.add_sticky_note_action.isChecked():
+            self.add_sticky_note_action.setChecked(False)
         for session in self._sessions_by_tab_index.values():
             session.canvas.set_text_selection_enabled(enabled)
         if enabled:
@@ -1954,12 +1995,26 @@ class MainWindow(QMainWindow):
     def _toggle_annotation_selection(self, enabled: bool) -> None:
         if enabled and self.select_text_action.isChecked():
             self.select_text_action.setChecked(False)
+        if enabled and self.add_sticky_note_action.isChecked():
+            self.add_sticky_note_action.setChecked(False)
         for session in self._sessions_by_tab_index.values():
             session.canvas.set_annotation_selection_enabled(enabled)
         if enabled:
             self.statusBar().showMessage("Annotation Select enabled · click markup to select")
         else:
             self.statusBar().showMessage("Annotation Select disabled")
+
+    def _toggle_sticky_note_mode(self, enabled: bool) -> None:
+        if enabled and self.select_text_action.isChecked():
+            self.select_text_action.setChecked(False)
+        if enabled and self.select_annotation_action.isChecked():
+            self.select_annotation_action.setChecked(False)
+        for session in self._sessions_by_tab_index.values():
+            session.canvas.set_sticky_note_enabled(enabled)
+        if enabled:
+            self.statusBar().showMessage("Sticky Note mode enabled · click anywhere on a page")
+        else:
+            self.statusBar().showMessage("Sticky Note mode disabled")
 
     def _on_text_selection_requested(
         self,
@@ -1972,6 +2027,7 @@ class MainWindow(QMainWindow):
         session = self._current_session()
         if session is None:
             return
+        self._clear_annotation_selection(session)
         try:
             selection = self.viewer_service.select_text(
                 session.document,
@@ -2018,6 +2074,117 @@ class MainWindow(QMainWindow):
             return
         self._select_annotation(session, annotation)
 
+    @staticmethod
+    def _annotation_kind_label(kind: str) -> str:
+        if kind == AnnotationService.STICKY_NOTE:
+            return "Sticky Note"
+        return kind.title()
+
+    def _on_sticky_note_requested(
+        self,
+        page_index: int,
+        x_ratio: float,
+        y_ratio: float,
+    ) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+        self._add_sticky_note_at_point(session, page_index, x_ratio, y_ratio)
+
+    def _add_sticky_note_at_point(
+        self,
+        session: DocumentSession,
+        page_index: int,
+        x_ratio: float,
+        y_ratio: float,
+    ) -> None:
+        content, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Add Sticky Note",
+            f"Sticky note content for page {page_index + 1}:",
+            "",
+        )
+        if not accepted:
+            return
+        try:
+            command = AddStickyNoteAnnotationCommand(
+                self.annotation_service,
+                session.document,
+                page_index,
+                x_ratio,
+                y_ratio,
+                content.strip(),
+            )
+            session.command_history.execute(command)
+        except Exception as exc:
+            QMessageBox.critical(self, "Sticky Note Failed", f"Could not add sticky note:\n{exc}")
+            return
+
+        self._clear_text_selection(session)
+        self._clear_annotation_selection(session)
+        self._refresh_annotated_page(session, page_index)
+        self._set_session_dirty(session, session.command_history.is_dirty)
+        if command.xref is not None:
+            annotation = next(
+                (
+                    item
+                    for item in self.annotation_service.list_annotations(session.document, page_index)
+                    if item.xref == command.xref
+                ),
+                None,
+            )
+            if annotation is not None:
+                self._select_annotation(session, annotation)
+        self.statusBar().showMessage(f"Added sticky note on page {page_index + 1}")
+
+    def _edit_selected_sticky_note(self) -> None:
+        session = self._current_session()
+        if (
+            session is None
+            or session.annotation_selection is None
+            or session.annotation_selection.kind != AnnotationService.STICKY_NOTE
+        ):
+            self.statusBar().showMessage("Select a sticky note before editing")
+            return
+
+        annotation = session.annotation_selection
+        new_content, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Edit Sticky Note",
+            f"Sticky note content for page {annotation.page_index + 1}:",
+            annotation.content,
+        )
+        if not accepted:
+            return
+
+        try:
+            session.command_history.execute(
+                EditStickyNoteCommand(
+                    self.annotation_service,
+                    session.document,
+                    annotation,
+                    new_content.strip(),
+                )
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Edit Sticky Note Failed", str(exc))
+            return
+
+        page_index = annotation.page_index
+        self._refresh_annotated_page(session, page_index)
+        self._set_session_dirty(session, session.command_history.is_dirty)
+        refreshed = next(
+            (
+                item
+                for item in self.annotation_service.list_annotations(session.document, page_index)
+                if item.xref == annotation.xref
+            ),
+            None,
+        )
+        if refreshed is not None:
+            self._select_annotation(session, refreshed)
+        self.statusBar().showMessage(f"Updated sticky note on page {page_index + 1}")
+
     def _select_annotation(self, session: DocumentSession, annotation: AnnotationInfo) -> None:
         self._clear_text_selection(session)
         session.annotation_selection = annotation
@@ -2027,7 +2194,7 @@ class MainWindow(QMainWindow):
         self.properties_panel.show_annotation(annotation)
         self._sync_markup_actions(session)
         self.statusBar().showMessage(
-            f"Selected {annotation.kind} on page {annotation.page_index + 1}"
+            f"Selected {self._annotation_kind_label(annotation.kind)} on page {annotation.page_index + 1}"
         )
 
     def _clear_annotation_selection(self, session: DocumentSession) -> None:
@@ -2047,7 +2214,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Delete Annotation",
-            f"Delete this {annotation.kind} annotation from page {annotation.page_index + 1}?",
+            f"Delete this {self._annotation_kind_label(annotation.kind)} from page {annotation.page_index + 1}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -2069,7 +2236,7 @@ class MainWindow(QMainWindow):
         self._refresh_annotated_page(session, page_index)
         self._set_session_dirty(session, session.command_history.is_dirty)
         self.statusBar().showMessage(
-            f"Deleted {annotation.kind} from page {page_index + 1}"
+            f"Deleted {self._annotation_kind_label(annotation.kind)} from page {page_index + 1}"
         )
 
     def _apply_markup(self, kind: str) -> None:
@@ -2100,6 +2267,7 @@ class MainWindow(QMainWindow):
             return
 
         page_index = selection.page_index
+        self._clear_annotation_selection(session)
         self._clear_text_selection(session)
         self._refresh_annotated_page(session, page_index)
         self._set_session_dirty(session, session.command_history.is_dirty)
@@ -2132,9 +2300,16 @@ class MainWindow(QMainWindow):
     def _sync_markup_actions(self, session: DocumentSession | None) -> None:
         has_selection = session is not None and session.text_selection is not None
         has_annotation = session is not None and session.annotation_selection is not None
+        has_sticky_note = (
+            has_annotation
+            and session is not None
+            and session.annotation_selection is not None
+            and session.annotation_selection.kind == AnnotationService.STICKY_NOTE
+        )
         self.highlight_action.setEnabled(has_selection)
         self.underline_action.setEnabled(has_selection)
         self.strikeout_action.setEnabled(has_selection)
+        self.edit_sticky_note_action.setEnabled(bool(has_sticky_note))
         self.delete_annotation_action.setEnabled(has_annotation)
 
     def _run_extract_current_page(self, session: DocumentSession, save_to_current: bool) -> None:
@@ -2474,6 +2649,7 @@ class MainWindow(QMainWindow):
             session.canvas.set_annotation_selection_enabled(
                 self.select_annotation_action.isChecked()
             )
+            session.canvas.set_sticky_note_enabled(self.add_sticky_note_action.isChecked())
             session.canvas.set_display_mode(self._display_mode)
             session.canvas.set_night_mode(self._night_reading_mode)
             self._queue_render_for_current_session(center_page=session.current_page)

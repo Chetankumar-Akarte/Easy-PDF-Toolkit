@@ -29,16 +29,17 @@ A desktop-first, fully offline PDF toolkit built with Python and PySide6. View, 
 - **Page Tools** — Rotate left/right, delete, reorder, and insert 1–100 blank pages before/after the current page using current/A4/Letter/Legal sizes and portrait/landscape orientation; Split / Extract Pages workflow supports current page, custom ranges, and split by size
 - **Undo / Redo** — Per-document command history for rotate, delete, reorder, and blank-page insertion with saved-state-aware dirty markers
 - **Text Markup Annotations** — Rotation-safe drag selection with visual feedback, native PDF Highlight / Underline / Strikeout annotations, annotation hit-testing and selection outlines, Properties details, context-menu/ribbon/Delete-key removal, save persistence, and per-document undo/redo
+- **Sticky Notes** — Click-to-place native PDF sticky notes with editable content, annotation selection outlines, Properties inspection, context-menu/ribbon operations, Delete-key removal with confirmation, and per-document undo/redo with save persistence
 - **Image Extraction** — Export all unique embedded images from the open PDF, or right-click a displayed image to extract it individually in its original detected format
 - **Recent Documents** — Welcome screen lists last 10 opened files sorted by most recently opened; click to reopen; missing files are cleaned up automatically; clear history action included
 - **Persistent Settings** — Window size, position, and last-used folder remembered between launches
-- **Keyboard Shortcuts** — `Ctrl+Z` Undo, `Ctrl+Shift+Z` Redo, `Alt+T` Select Text, `Alt+A` Select Annotation, `Delete` Delete Annotation, `Ctrl+Alt+H` Highlight, `Ctrl+Alt+U` Underline, `Ctrl+Alt+K` Strikeout, `Ctrl+F` Find, `Enter` / `Shift+Enter` next/previous match, `Esc` close search, `Ctrl+Shift+M` Merge PDFs, `Ctrl+Shift+B` Insert Blank Pages, `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit
+- **Keyboard Shortcuts** — `Ctrl+Z` Undo, `Ctrl+Shift+Z` Redo, `Alt+T` Select Text, `Alt+A` Select Annotation, `Alt+N` Add Sticky Note mode, `Ctrl+Alt+N` Edit selected Sticky Note, `Delete` Delete Annotation, `Ctrl+Alt+H` Highlight, `Ctrl+Alt+U` Underline, `Ctrl+Alt+K` Strikeout, `Ctrl+F` Find, `Enter` / `Shift+Enter` next/previous match, `Esc` close search, `Ctrl+Shift+M` Merge PDFs, `Ctrl+Shift+B` Insert Blank Pages, `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit
 - **About Dialog** — Help > About with app metadata, runtime details, and repository link
 
 ### Roadmap
 
 - Rendering parity polish — final quality alignment with reference viewer in all zoom/night scenarios
-- Annotations — text boxes, sticky notes, and freehand draw
+- Annotations — text boxes and freehand draw
 - Overlay editing — add text boxes, images, shapes, stamps, signatures
 - Utilities — watermark, page numbering
 - OCR — scanned PDF / image to searchable PDF (offline, Tesseract)

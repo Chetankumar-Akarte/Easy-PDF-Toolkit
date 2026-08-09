@@ -1,5 +1,10 @@
 from .command import Command, CommandHistory
-from .annotation_commands import AddMarkupAnnotationCommand, DeleteAnnotationCommand
+from .annotation_commands import (
+	AddMarkupAnnotationCommand,
+	AddStickyNoteAnnotationCommand,
+	DeleteAnnotationCommand,
+	EditStickyNoteCommand,
+)
 from .page_commands import (
 	DeletePageCommand,
 	InsertBlankPagesCommand,
@@ -11,7 +16,9 @@ __all__ = [
 	"Command",
 	"CommandHistory",
 	"AddMarkupAnnotationCommand",
+	"AddStickyNoteAnnotationCommand",
 	"DeleteAnnotationCommand",
+	"EditStickyNoteCommand",
 	"DeletePageCommand",
 	"InsertBlankPagesCommand",
 	"ReorderPagesCommand",

@@ -20,7 +20,9 @@ class AnnotationService:
     HIGHLIGHT = "highlight"
     UNDERLINE = "underline"
     STRIKEOUT = "strikeout"
+    STICKY_NOTE = "text"
     MARKUP_KINDS = (HIGHLIGHT, UNDERLINE, STRIKEOUT)
+    SUPPORTED_KINDS = MARKUP_KINDS + (STICKY_NOTE,)
 
     def add_markup(
         self,
@@ -75,6 +77,76 @@ class AnnotationService:
             annotation = annotation.next
         raise ValueError("Annotation no longer exists.")
 
+    def add_sticky_note(
+        self,
+        document,
+        page_index: int,
+        x_ratio: float,
+        y_ratio: float,
+        content: str,
+        color: tuple[float, float, float] = (1.0, 0.86, 0.2),
+        opacity: float = 0.95,
+        author: str = "Easy PDF Tool Kit",
+    ) -> int:
+        import fitz
+
+        page = document.load_page(page_index)
+        visual_page = page.rect
+        visual_point = fitz.Point(
+            max(0.0, min(float(x_ratio), 1.0)) * visual_page.width,
+            max(0.0, min(float(y_ratio), 1.0)) * visual_page.height,
+        )
+        source_point = visual_point * page.derotation_matrix
+        annotation = page.add_text_annot(source_point, content)
+        annotation.set_colors(stroke=color)
+        annotation.set_opacity(max(0.0, min(float(opacity), 1.0)))
+        annotation.set_info(title=author, content=content)
+        annotation.update()
+        return annotation.xref
+
+    def update_annotation_content(
+        self,
+        document,
+        page_index: int,
+        xref: int,
+        content: str,
+    ) -> None:
+        page = document.load_page(page_index)
+        annotation = page.first_annot
+        while annotation is not None:
+            if annotation.xref == xref:
+                annotation.set_info(content=content)
+                annotation.update()
+                return
+            annotation = annotation.next
+        raise ValueError("Annotation no longer exists.")
+
+    def restore_annotation(self, document, annotation: AnnotationInfo) -> int:
+        if annotation.kind in self.MARKUP_KINDS:
+            return self.add_markup(
+                document,
+                annotation.page_index,
+                annotation.kind,
+                annotation.rects,
+                annotation.content,
+                annotation.color,
+                annotation.opacity,
+            )
+        if annotation.kind == self.STICKY_NOTE:
+            if not annotation.rects:
+                raise ValueError("Sticky note geometry is missing.")
+            rect = annotation.rects[0]
+            return self.add_sticky_note(
+                document,
+                annotation.page_index,
+                rect[0],
+                rect[1],
+                annotation.content,
+                annotation.color,
+                annotation.opacity,
+            )
+        raise ValueError(f"Unsupported annotation type: {annotation.kind}")
+
     def annotation_at_point(
         self,
         document,
@@ -105,7 +177,7 @@ class AnnotationService:
             annotation = page.first_annot
             while annotation is not None:
                 annotation_type = str(annotation.type[1]).lower().replace(" ", "")
-                if annotation_type in self.MARKUP_KINDS:
+                if annotation_type in self.SUPPORTED_KINDS:
                     stroke = annotation.colors.get("stroke") or (1.0, 1.0, 0.0)
                     visual_rects = self._visual_annotation_rects(page, annotation)
                     annotations.append(
@@ -121,6 +193,7 @@ class AnnotationService:
                     )
                 annotation = annotation.next
         return annotations
+
 
     @staticmethod
     def _visual_annotation_rects(page, annotation) -> tuple[tuple[float, float, float, float], ...]:

@@ -98,3 +98,19 @@ def test_annotation_selection_paints_outline_and_emits_click() -> None:
     cleared = canvas._page_labels[0].pixmap()
     assert cleared is not None
     assert cleared.toImage().pixelColor(18, 20) == QColor("white")
+
+
+def test_sticky_note_mode_emits_normalized_click() -> None:
+    app = QApplication.instance() or QApplication([])
+    canvas = PdfCanvas()
+    canvas.set_document_pages([QImage(100, 100, QImage.Format.Format_RGB888)])
+    canvas.set_sticky_note_enabled(True)
+    canvas.show()
+    app.processEvents()
+
+    label = canvas._page_labels[0]
+    spy = QSignalSpy(canvas.sticky_note_requested)
+    QTest.mouseClick(label, Qt.MouseButton.LeftButton, pos=QPoint(25, 70))
+
+    assert spy.count() == 1
+    assert spy.at(0) == [0, 0.25, 0.7]

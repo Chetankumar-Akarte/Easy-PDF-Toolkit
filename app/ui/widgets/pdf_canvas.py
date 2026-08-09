@@ -6,33 +6,37 @@ from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget
 class SelectablePageLabel(QLabel):
     selection_requested = Signal(int, float, float, float, float)
     annotation_selection_requested = Signal(int, float, float)
+    sticky_note_requested = Signal(int, float, float)
 
     def __init__(self, page_index: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._page_index = page_index
         self._selection_enabled = False
         self._annotation_selection_enabled = False
+        self._sticky_note_enabled = False
         self._selection_start: QPoint | None = None
+
+    def _update_cursor(self) -> None:
+        if self._selection_enabled:
+            self.setCursor(Qt.CursorShape.IBeamCursor)
+        elif self._sticky_note_enabled:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._annotation_selection_enabled:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def set_selection_enabled(self, enabled: bool) -> None:
         self._selection_enabled = enabled
-        self.setCursor(
-            Qt.CursorShape.IBeamCursor
-            if enabled
-            else Qt.CursorShape.PointingHandCursor
-            if self._annotation_selection_enabled
-            else Qt.CursorShape.ArrowCursor
-        )
+        self._update_cursor()
 
     def set_annotation_selection_enabled(self, enabled: bool) -> None:
         self._annotation_selection_enabled = enabled
-        self.setCursor(
-            Qt.CursorShape.IBeamCursor
-            if self._selection_enabled
-            else Qt.CursorShape.PointingHandCursor
-            if enabled
-            else Qt.CursorShape.ArrowCursor
-        )
+        self._update_cursor()
+
+    def set_sticky_note_enabled(self, enabled: bool) -> None:
+        self._sticky_note_enabled = enabled
+        self._update_cursor()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if self._selection_enabled and event.button() == Qt.MouseButton.LeftButton:
@@ -62,6 +66,17 @@ class SelectablePageLabel(QLabel):
                 )
             event.accept()
             return
+        if self._sticky_note_enabled and event.button() == Qt.MouseButton.LeftButton:
+            width = max(self.width(), 1)
+            height = max(self.height(), 1)
+            position = event.position()
+            self.sticky_note_requested.emit(
+                self._page_index,
+                max(0.0, min(position.x() / width, 1.0)),
+                max(0.0, min(position.y() / height, 1.0)),
+            )
+            event.accept()
+            return
         if self._annotation_selection_enabled and event.button() == Qt.MouseButton.LeftButton:
             width = max(self.width(), 1)
             height = max(self.height(), 1)
@@ -86,6 +101,7 @@ class PdfCanvas(QWidget):
     page_context_requested = Signal(int, float, float, object)
     text_selection_requested = Signal(int, float, float, float, float)
     annotation_selection_requested = Signal(int, float, float)
+    sticky_note_requested = Signal(int, float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -101,6 +117,7 @@ class PdfCanvas(QWidget):
         self._active_search_match: tuple[int, tuple[float, float, float, float]] | None = None
         self._selection_enabled = False
         self._annotation_selection_enabled = False
+        self._sticky_note_enabled = False
         self._text_selection: tuple[int, list[tuple[float, float, float, float]]] | None = None
         self._annotation_selection: tuple[int, list[tuple[float, float, float, float]]] | None = None
 
@@ -187,8 +204,10 @@ class PdfCanvas(QWidget):
             page_label.setFixedSize(600, 400)
             page_label.set_selection_enabled(self._selection_enabled)
             page_label.set_annotation_selection_enabled(self._annotation_selection_enabled)
+            page_label.set_sticky_note_enabled(self._sticky_note_enabled)
             page_label.selection_requested.connect(self.text_selection_requested)
             page_label.annotation_selection_requested.connect(self.annotation_selection_requested)
+            page_label.sticky_note_requested.connect(self.sticky_note_requested)
             self._configure_page_context_menu(page_label, index)
             self._style_loading_page(page_label)
             self._pages_layout.addWidget(page_label)
@@ -211,8 +230,10 @@ class PdfCanvas(QWidget):
             page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             page_label.set_selection_enabled(self._selection_enabled)
             page_label.set_annotation_selection_enabled(self._annotation_selection_enabled)
+            page_label.set_sticky_note_enabled(self._sticky_note_enabled)
             page_label.selection_requested.connect(self.text_selection_requested)
             page_label.annotation_selection_requested.connect(self.annotation_selection_requested)
+            page_label.sticky_note_requested.connect(self.sticky_note_requested)
             self._configure_page_context_menu(page_label, index)
             self._style_loading_page(page_label)
             self._pages_layout.addWidget(page_label)
@@ -353,6 +374,12 @@ class PdfCanvas(QWidget):
         for label in self._page_labels:
             if isinstance(label, SelectablePageLabel):
                 label.set_annotation_selection_enabled(self._annotation_selection_enabled)
+
+    def set_sticky_note_enabled(self, enabled: bool) -> None:
+        self._sticky_note_enabled = bool(enabled)
+        for label in self._page_labels:
+            if isinstance(label, SelectablePageLabel):
+                label.set_sticky_note_enabled(self._sticky_note_enabled)
 
     def set_text_selection(
         self,
