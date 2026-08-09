@@ -26,6 +26,7 @@ A desktop-first, fully offline PDF toolkit built with Python and PySide6. View, 
 - **Zoom Controls** — Zoom in / out / reset with customizable level, viewport anchor preserved on zoom
 - **File Operations** — Open, Save (incremental), Save As with overwrite confirmation, Close tab
 - **Page Tools** — Rotate left/right, delete page, reorder pages, and Split / Extract Pages workflow (current page, custom ranges, split by size)
+- **Image Extraction** — Export all unique embedded images from the open PDF, or right-click a displayed image to extract it individually in its original detected format
 - **Recent Documents** — Welcome screen lists last 10 opened files sorted by most recently opened; click to reopen; missing files are cleaned up automatically; clear history action included
 - **Persistent Settings** — Window size, position, and last-used folder remembered between launches
 - **Keyboard Shortcuts** — `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit

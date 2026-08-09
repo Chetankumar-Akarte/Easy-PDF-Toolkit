@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -12,6 +13,7 @@ from app.ui.main_window import MainWindow
 
 
 def create_application() -> tuple[QApplication, MainWindow]:
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Easy PDF Tool Kit")
     app.setOrganizationName("EasyPDF")

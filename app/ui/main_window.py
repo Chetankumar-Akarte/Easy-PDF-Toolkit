@@ -213,6 +213,8 @@ class MainWindow(QMainWindow):
                 self._apply_fit_width(update_status=False, align_top=False)
 
     def _build_actions(self) -> None:
+        self.menuBar().setNativeMenuBar(False)
+
         self.open_action = QAction(self._icon("open_file"), "Open", self)
         self.open_action.setShortcut(QKeySequence.StandardKey.Open)
         self.open_action.triggered.connect(self._open_file)
@@ -254,6 +256,10 @@ class MainWindow(QMainWindow):
         self.split_extract_action.setShortcut(QKeySequence("Ctrl+X"))
         self.split_extract_action.triggered.connect(self._open_split_extract_dialog)
 
+        self.extract_images_action = QAction(self._icon("extract_image"), "Extract Images...", self)
+        self.extract_images_action.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        self.extract_images_action.triggered.connect(self._extract_images_from_document)
+
         self.fit_width_action = QAction(self._icon("fit_width"), "Fit Width", self)
         self.fit_width_action.setShortcut(QKeySequence("Ctrl+W"))
         self.fit_width_action.triggered.connect(self._fit_width)
@@ -276,7 +282,7 @@ class MainWindow(QMainWindow):
         self.toggle_theme_action.setShortcut(QKeySequence("Ctrl+Alt+T"))
         self.toggle_theme_action.triggered.connect(self._toggle_theme)
 
-        self.toggle_properties_action = QAction("Properties", self)
+        self.toggle_properties_action = QAction(self._icon("properties"), "Properties", self)
         self.toggle_properties_action.setCheckable(True)
         self.toggle_properties_action.setChecked(False)
         self.toggle_properties_action.toggled.connect(self._set_properties_panel_visible)
@@ -293,42 +299,43 @@ class MainWindow(QMainWindow):
         self.toggle_display_mode_action.triggered.connect(self._toggle_reader_display_mode)
         self._sync_reader_mode_ui()
 
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut(QKeySequence("Ctrl+Q"))
-        exit_action.triggered.connect(self._exit_application)
+        self.exit_action = QAction(self._icon("exit"), "Exit", self)
+        self.exit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        self.exit_action.triggered.connect(self._exit_application)
 
-        about_action = QAction(self._icon("about_info"), "About", self)
-        about_action.triggered.connect(self._show_about)
+        self.about_action = QAction(self._icon("about_info"), "About", self)
+        self.about_action.triggered.connect(self._show_about)
 
-        file_menu = self.menuBar().addMenu("File")
-        file_menu.addAction(self.open_action)
-        file_menu.addAction(self.close_action)
-        file_menu.addAction(self.clear_recent_action)
-        file_menu.addSeparator()
-        file_menu.addAction(self.save_action)
-        file_menu.addAction(self.save_as_action)
-        file_menu.addSeparator()
-        file_menu.addAction(exit_action)
+        self.file_menu = self.menuBar().addMenu("File")
+        self.file_menu.addAction(self.open_action)
+        self.file_menu.addAction(self.close_action)
+        self.file_menu.addAction(self.clear_recent_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.save_action)
+        self.file_menu.addAction(self.save_as_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.exit_action)
 
-        edit_menu = self.menuBar().addMenu("Edit")
-        edit_menu.addAction(self.rotate_left_action)
-        edit_menu.addAction(self.rotate_right_action)
-        edit_menu.addAction(self.delete_page_action)
-        edit_menu.addSeparator()
-        edit_menu.addAction(self.split_extract_action)
+        self.edit_menu = self.menuBar().addMenu("Edit")
+        self.edit_menu.addAction(self.rotate_left_action)
+        self.edit_menu.addAction(self.rotate_right_action)
+        self.edit_menu.addAction(self.delete_page_action)
+        self.edit_menu.addSeparator()
+        self.edit_menu.addAction(self.split_extract_action)
+        self.edit_menu.addAction(self.extract_images_action)
 
-        view_menu = self.menuBar().addMenu("View")
-        view_menu.addAction(self.toggle_theme_action)
-        view_menu.addAction(self.fit_width_action)
-        view_menu.addAction(self.night_reading_action)
-        view_menu.addAction(self.toggle_thumbnail_action)
-        view_menu.addAction(self.view_continuous_action)
-        view_menu.addAction(self.view_single_page_action)
-        view_menu.addAction(self.toggle_toc_action)
-        view_menu.addAction(self.toggle_properties_action)
+        self.view_menu = self.menuBar().addMenu("View")
+        self.view_menu.addAction(self.toggle_theme_action)
+        self.view_menu.addAction(self.fit_width_action)
+        self.view_menu.addAction(self.night_reading_action)
+        self.view_menu.addAction(self.toggle_thumbnail_action)
+        self.view_menu.addAction(self.view_continuous_action)
+        self.view_menu.addAction(self.view_single_page_action)
+        self.view_menu.addAction(self.toggle_toc_action)
+        self.view_menu.addAction(self.toggle_properties_action)
 
-        help_menu = self.menuBar().addMenu("Help")
-        help_menu.addAction(about_action)
+        self.help_menu = self.menuBar().addMenu("Help")
+        self.help_menu.addAction(self.about_action)
 
         self._bind_navigation_shortcuts()
         self._sync_document_actions(page_count=0)
@@ -393,6 +400,13 @@ class MainWindow(QMainWindow):
         self.split_extract_button.setDefaultAction(self.split_extract_action)
         self.split_extract_button.setToolTip(self.split_extract_action.text())
         self._style_action_bar_button(self.split_extract_button)
+
+        self.extract_images_button = QToolButton(self.action_bar)
+        self.extract_images_button.setDefaultAction(self.extract_images_action)
+        self.extract_images_button.setToolTip(self.extract_images_action.text())
+        self._style_action_bar_button(self.extract_images_button)
+        action_bar_layout.addWidget(self.extract_images_button)
+
         action_bar_layout.addWidget(self.split_extract_button)
 
         action_bar_layout.addStretch(1)
@@ -633,6 +647,7 @@ class MainWindow(QMainWindow):
         self.rotate_right_action.setEnabled(has_pages)
         self.delete_page_action.setEnabled(has_pages)
         self.split_extract_action.setEnabled(has_pages)
+        self.extract_images_action.setEnabled(has_pages)
         self.fit_width_action.setEnabled(has_pages)
         self.night_reading_action.setEnabled(has_document)
         self.toggle_display_mode_action.setEnabled(has_document)
@@ -690,18 +705,49 @@ class MainWindow(QMainWindow):
         self.close_action.setIcon(self._icon("close_file"))
         self.save_action.setIcon(self._icon("save_file"))
         self.save_as_action.setIcon(self._icon("save_as"))
+        self.clear_recent_action.setIcon(self._icon("clear_recent"))
         self.rotate_left_action.setIcon(self._icon("rotate_left"))
         self.rotate_right_action.setIcon(self._icon("rotate_right"))
         self.delete_page_action.setIcon(self._icon("delete_page"))
         self.toggle_thumbnail_action.setIcon(self._icon("thumbnail_panel"))
         self.split_extract_action.setIcon(self._icon("split_extract"))
+        self.extract_images_action.setIcon(self._icon("extract_image"))
         self.fit_width_action.setIcon(self._icon("fit_width"))
         self.night_reading_action.setIcon(self._icon("night_reading"))
         self.toggle_toc_action.setIcon(self._icon("toc_bookmarks"))
+        self.toggle_properties_action.setIcon(self._icon("properties"))
+        self.view_continuous_action.setIcon(self._icon("continuous_mode"))
+        self.view_single_page_action.setIcon(self._icon("single_page_mode"))
+        self.exit_action.setIcon(self._icon("exit"))
+        self.about_action.setIcon(self._icon("about_info"))
+
+        for action in (
+            self.open_action,
+            self.close_action,
+            self.save_action,
+            self.save_as_action,
+            self.clear_recent_action,
+            self.rotate_left_action,
+            self.rotate_right_action,
+            self.delete_page_action,
+            self.toggle_thumbnail_action,
+            self.split_extract_action,
+            self.extract_images_action,
+            self.fit_width_action,
+            self.night_reading_action,
+            self.toggle_toc_action,
+            self.toggle_properties_action,
+            self.view_continuous_action,
+            self.view_single_page_action,
+            self.exit_action,
+            self.about_action,
+        ):
+            action.setIconVisibleInMenu(True)
 
         next_theme = "light" if self._settings.theme == "dark" else "dark"
         theme_icon = "theme_sun" if self._settings.theme == "dark" else "theme_moon"
         self.toggle_theme_action.setIcon(self._icon(theme_icon))
+        self.toggle_theme_action.setIconVisibleInMenu(True)
         self.toggle_theme_action.setText("Light / Dark")
         self.toggle_theme_action.setToolTip(f"Switch to {next_theme.title()} Theme (Ctrl+Alt+T)")
 
@@ -824,6 +870,7 @@ class MainWindow(QMainWindow):
         canvas.zoom_requested.connect(self._on_canvas_zoom_requested)
         canvas.zoom_level_changed.connect(self._on_canvas_zoom_level_changed)
         canvas.current_page_changed.connect(self._on_canvas_page_changed)
+        canvas.page_context_requested.connect(self._show_page_context_menu)
         canvas.set_page_count(page_count, page_sizes=page_sizes)
 
         tab_name = Path(selected_path).name
@@ -1172,6 +1219,90 @@ class MainWindow(QMainWindow):
                 )
         except Exception as exc:
             QMessageBox.critical(self, "Split / Extract Failed", f"Could not complete operation:\n{exc}")
+
+    def _extract_images_from_document(self) -> None:
+        session = self._current_session()
+        if session is None:
+            self.statusBar().showMessage("No document loaded")
+            return
+
+        output_directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder for Extracted Images",
+            str(Path(session.path).parent),
+        )
+        if not output_directory:
+            return
+
+        try:
+            extracted = self.pdf_adapter.extract_images(
+                session.document,
+                output_directory,
+                Path(session.path).stem,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Image Extraction Failed", f"Could not extract images:\n{exc}")
+            return
+
+        if not extracted:
+            QMessageBox.information(self, "Extract Images", "No embedded images were found in this PDF.")
+            self.statusBar().showMessage("No embedded images found")
+            return
+
+        QMessageBox.information(
+            self,
+            "Extract Images",
+            f"Extracted {len(extracted)} image(s) to:\n{output_directory}",
+        )
+        self.statusBar().showMessage(f"Extracted {len(extracted)} image(s)")
+
+    def _show_page_context_menu(
+        self,
+        page_index: int,
+        x_ratio: float,
+        y_ratio: float,
+        global_position,
+    ) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+
+        image_match = self.pdf_adapter.image_at_point(
+            session.document,
+            page_index,
+            x_ratio,
+            y_ratio,
+        )
+        if image_match is None:
+            return
+
+        xref, extension = image_match
+        menu = QMenu(self)
+        extract_action = menu.addAction(self._icon("extract_image"), "Extract This Image...")
+        if menu.exec(global_position) != extract_action:
+            return
+
+        suggested_name = f"{Path(session.path).stem}_page_{page_index + 1}_image.{extension}"
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "Extract Image",
+            str(Path(session.path).parent / suggested_name),
+            f"{extension.upper()} image (*.{extension});;All files (*)",
+        )
+        if not selected:
+            return
+
+        destination = Path(selected)
+        if not destination.suffix:
+            destination = destination.with_suffix(f".{extension}")
+
+        try:
+            self.pdf_adapter.extract_image(session.document, xref, str(destination))
+        except Exception as exc:
+            QMessageBox.critical(self, "Image Extraction Failed", f"Could not extract image:\n{exc}")
+            return
+
+        self.statusBar().showMessage(f"Extracted image to {destination.name}")
 
     def _run_extract_current_page(self, session: DocumentSession, save_to_current: bool) -> None:
         page_number = session.current_page + 1

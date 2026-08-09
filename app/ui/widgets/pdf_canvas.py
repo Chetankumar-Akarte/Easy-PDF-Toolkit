@@ -10,6 +10,7 @@ class PdfCanvas(QWidget):
     zoom_requested = Signal(int)
     zoom_level_changed = Signal(float)
     current_page_changed = Signal(int)
+    page_context_requested = Signal(int, float, float, object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -102,6 +103,7 @@ class PdfCanvas(QWidget):
             page_label = QLabel(f"Loading page {index + 1}...", self._container)
             page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             page_label.setFixedSize(600, 400)
+            self._configure_page_context_menu(page_label, index)
             self._style_loading_page(page_label)
             self._pages_layout.addWidget(page_label)
             self._page_labels.append(page_label)
@@ -118,9 +120,10 @@ class PdfCanvas(QWidget):
         self._page_labels = []
         self._current_page = 0
 
-        for _ in images:
+        for index, _ in enumerate(images):
             page_label = QLabel(self._container)
             page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._configure_page_context_menu(page_label, index)
             self._style_loading_page(page_label)
             self._pages_layout.addWidget(page_label)
             self._page_labels.append(page_label)
@@ -248,6 +251,26 @@ class PdfCanvas(QWidget):
 
     def current_page(self) -> int:
         return self._current_page
+
+    def _configure_page_context_menu(self, label: QLabel, page_index: int) -> None:
+        label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        label.customContextMenuRequested.connect(
+            lambda position, index=page_index, page_label=label: self._emit_page_context_request(
+                index,
+                page_label,
+                position,
+            )
+        )
+
+    def _emit_page_context_request(self, page_index: int, label: QLabel, position) -> None:
+        x_ratio = position.x() / max(label.width(), 1)
+        y_ratio = position.y() / max(label.height(), 1)
+        self.page_context_requested.emit(
+            page_index,
+            x_ratio,
+            y_ratio,
+            label.mapToGlobal(position),
+        )
 
     def _refresh_image(self) -> None:
         if not self._page_images:
