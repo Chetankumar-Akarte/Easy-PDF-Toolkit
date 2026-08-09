@@ -9,6 +9,13 @@ class SearchMatch:
     rect: tuple[float, float, float, float]
 
 
+@dataclass(frozen=True)
+class TextSelection:
+    page_index: int
+    text: str
+    rects: tuple[tuple[float, float, float, float], ...]
+
+
 class ViewerService:
     """Document-level viewer operations that are independent of Qt widgets."""
 
@@ -45,3 +52,58 @@ class ViewerService:
                 )
             )
         return matches
+
+    def select_text(
+        self,
+        document,
+        page_index: int,
+        visual_rect: tuple[float, float, float, float],
+    ) -> TextSelection | None:
+        import fitz
+
+        page = document.load_page(page_index)
+        page_rect = page.rect
+        left, top, right, bottom = visual_rect
+        normalized = (
+            min(left, right),
+            min(top, bottom),
+            max(left, right),
+            max(top, bottom),
+        )
+        selection_rect = fitz.Rect(
+            normalized[0] * page_rect.width,
+            normalized[1] * page_rect.height,
+            normalized[2] * page_rect.width,
+            normalized[3] * page_rect.height,
+        )
+
+        selected_words: list[tuple] = []
+        selected_rects: list[tuple[float, float, float, float]] = []
+        for word in page.get_text("words", sort=True):
+            source_rect = fitz.Rect(word[:4])
+            word_rect = source_rect * page.rotation_matrix
+            if not word_rect.intersects(selection_rect):
+                continue
+            selected_words.append(word)
+            selected_rects.append(
+                (
+                    word_rect.x0 / page_rect.width,
+                    word_rect.y0 / page_rect.height,
+                    word_rect.x1 / page_rect.width,
+                    word_rect.y1 / page_rect.height,
+                )
+            )
+
+        if not selected_words:
+            return None
+
+        lines: list[list[str]] = []
+        previous_line: tuple[int, int] | None = None
+        for word in selected_words:
+            line_key = (int(word[5]), int(word[6]))
+            if line_key != previous_line:
+                lines.append([])
+                previous_line = line_key
+            lines[-1].append(str(word[4]))
+        text = "\n".join(" ".join(line) for line in lines)
+        return TextSelection(page_index, text, tuple(selected_rects))

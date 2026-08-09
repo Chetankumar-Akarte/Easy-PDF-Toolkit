@@ -110,7 +110,7 @@ class PyMuPDFAdapter:
 
         page = document.load_page(page_index)
         matrix = fitz.Matrix(zoom * dpr, zoom * dpr).prerotate(rotation_degrees)
-        pix = page.get_pixmap(matrix=matrix, alpha=False, annots=False)
+        pix = page.get_pixmap(matrix=matrix, alpha=False, annots=True)
         if invert_colors:
             pix.invert_irect()
         image = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from app.core.services.document_service import DocumentService
 from app.core.commands import (
+    AddMarkupAnnotationCommand,
     Command,
     CommandHistory,
     DeletePageCommand,
@@ -46,8 +47,9 @@ from app.core.commands import (
     ReorderPagesCommand,
     RotatePageCommand,
 )
+from app.core.services.annotation_service import AnnotationService
 from app.core.services.page_service import MergeCancelledError, MergeSource, PageService
-from app.core.services.viewer_service import SearchMatch, ViewerService
+from app.core.services.viewer_service import SearchMatch, TextSelection, ViewerService
 from app.infra.pdf_engines.pymupdf_adapter import PyMuPDFAdapter
 from app.infra.storage.recent_files_repo import RecentFilesRepository
 from app.infra.storage.settings_repo import AppSettings, SettingsRepository
@@ -75,6 +77,7 @@ class DocumentSession:
     active_search_match: int = -1
     is_dirty: bool = False
     command_history: CommandHistory = field(default_factory=CommandHistory)
+    text_selection: TextSelection | None = None
 
 
 class MainWindow(QMainWindow):
@@ -106,6 +109,7 @@ class MainWindow(QMainWindow):
         self._night_reading_mode = bool(self._settings.night_mode)
         self.document_service = DocumentService()
         self.page_service = PageService()
+        self.annotation_service = AnnotationService()
         self.viewer_service = ViewerService()
         self.pdf_adapter = PyMuPDFAdapter()
         self._sessions_by_tab_index: dict[int, DocumentSession] = {}
@@ -278,6 +282,28 @@ class MainWindow(QMainWindow):
         self.search_action.setShortcut(QKeySequence.StandardKey.Find)
         self.search_action.triggered.connect(self._show_search_bar)
 
+        self.select_text_action = QAction(self._icon("select_text"), "Select Text", self)
+        self.select_text_action.setCheckable(True)
+        self.select_text_action.setShortcut(QKeySequence("Alt+T"))
+        self.select_text_action.setToolTip("Select Text (Alt+T)")
+        self.select_text_action.toggled.connect(self._toggle_text_selection)
+
+        self.highlight_action = QAction(self._icon("highlight"), "Highlight", self)
+        self.highlight_action.setShortcut(QKeySequence("Ctrl+Alt+H"))
+        self.highlight_action.triggered.connect(
+            lambda: self._apply_markup(AnnotationService.HIGHLIGHT)
+        )
+        self.underline_action = QAction(self._icon("underline"), "Underline", self)
+        self.underline_action.setShortcut(QKeySequence("Ctrl+Alt+U"))
+        self.underline_action.triggered.connect(
+            lambda: self._apply_markup(AnnotationService.UNDERLINE)
+        )
+        self.strikeout_action = QAction(self._icon("strikeout"), "Strikeout", self)
+        self.strikeout_action.setShortcut(QKeySequence("Ctrl+Alt+K"))
+        self.strikeout_action.triggered.connect(
+            lambda: self._apply_markup(AnnotationService.STRIKEOUT)
+        )
+
         self.undo_action = QAction(self._icon("undo"), "Undo", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.triggered.connect(self._undo_current_document)
@@ -381,6 +407,11 @@ class MainWindow(QMainWindow):
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.search_action)
         self.edit_menu.addSeparator()
+        self.edit_menu.addAction(self.select_text_action)
+        self.edit_menu.addAction(self.highlight_action)
+        self.edit_menu.addAction(self.underline_action)
+        self.edit_menu.addAction(self.strikeout_action)
+        self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.rotate_left_action)
         self.edit_menu.addAction(self.rotate_right_action)
         self.edit_menu.addAction(self.insert_blank_page_action)
@@ -434,6 +465,18 @@ class MainWindow(QMainWindow):
             button = QToolButton(self.action_bar)
             button.setDefaultAction(action)
             button.setToolTip(action.text())
+            self._style_action_bar_button(button)
+            action_bar_layout.addWidget(button)
+
+        for action in [
+            self.select_text_action,
+            self.highlight_action,
+            self.underline_action,
+            self.strikeout_action,
+        ]:
+            button = QToolButton(self.action_bar)
+            button.setDefaultAction(action)
+            button.setToolTip(action.toolTip() or action.text())
             self._style_action_bar_button(button)
             action_bar_layout.addWidget(button)
 
@@ -795,6 +838,8 @@ class MainWindow(QMainWindow):
         self.close_action.setEnabled(has_document)
         self.merge_pdfs_action.setEnabled(True)
         self._sync_undo_redo_actions(self._current_session())
+        self.select_text_action.setEnabled(has_pages)
+        self._sync_markup_actions(self._current_session())
         self.save_action.setEnabled(has_document)
         self.save_as_action.setEnabled(has_document)
         self.rotate_left_action.setEnabled(has_pages)
@@ -819,6 +864,12 @@ class MainWindow(QMainWindow):
 
         self.properties_panel.setVisible(visible)
         self._update_side_panel_sizes()
+        QTimer.singleShot(0, self._refit_after_panel_change)
+
+    def _refit_after_panel_change(self) -> None:
+        if self._fit_mode != self.FIT_MODE_WIDTH or self._current_session() is None:
+            return
+        self._apply_fit_width(update_status=False, align_top=False)
 
     def _on_side_panel_tab_close_requested(self, index: int) -> None:
         if index == self.thumbnail_tab_index:
@@ -864,6 +915,10 @@ class MainWindow(QMainWindow):
         self.save_as_action.setIcon(self._icon("save_as"))
         self.clear_recent_action.setIcon(self._icon("clear_recent"))
         self.search_action.setIcon(self._icon("search"))
+        self.select_text_action.setIcon(self._icon("select_text"))
+        self.highlight_action.setIcon(self._icon("highlight"))
+        self.underline_action.setIcon(self._icon("underline"))
+        self.strikeout_action.setIcon(self._icon("strikeout"))
         self.undo_action.setIcon(self._icon("undo"))
         self.redo_action.setIcon(self._icon("redo"))
         self.rotate_left_action.setIcon(self._icon("rotate_left"))
@@ -890,6 +945,10 @@ class MainWindow(QMainWindow):
             self.save_as_action,
             self.clear_recent_action,
             self.search_action,
+            self.select_text_action,
+            self.highlight_action,
+            self.underline_action,
+            self.strikeout_action,
             self.undo_action,
             self.redo_action,
             self.rotate_left_action,
@@ -1129,6 +1188,8 @@ class MainWindow(QMainWindow):
         canvas.zoom_level_changed.connect(self._on_canvas_zoom_level_changed)
         canvas.current_page_changed.connect(self._on_canvas_page_changed)
         canvas.page_context_requested.connect(self._show_page_context_menu)
+        canvas.text_selection_requested.connect(self._on_text_selection_requested)
+        canvas.set_text_selection_enabled(self.select_text_action.isChecked())
         canvas.set_page_count(page_count, page_sizes=page_sizes)
 
         tab_name = Path(selected_path).name
@@ -1780,21 +1841,38 @@ class MainWindow(QMainWindow):
         if session is None:
             return
 
+        has_selection = (
+            session.text_selection is not None
+            and session.text_selection.page_index == page_index
+        )
         image_match = self.pdf_adapter.image_at_point(
             session.document,
             page_index,
             x_ratio,
             y_ratio,
         )
-        if image_match is None:
+        if image_match is None and not has_selection:
+            return
+
+        menu = QMenu(self)
+        markup_actions: dict[QAction, str] = {}
+        if has_selection:
+            markup_actions[menu.addAction(self._icon("highlight"), "Highlight Selection")] = AnnotationService.HIGHLIGHT
+            markup_actions[menu.addAction(self._icon("underline"), "Underline Selection")] = AnnotationService.UNDERLINE
+            markup_actions[menu.addAction(self._icon("strikeout"), "Strikeout Selection")] = AnnotationService.STRIKEOUT
+        extract_action = None
+        if image_match is not None:
+            if has_selection:
+                menu.addSeparator()
+            extract_action = menu.addAction(self._icon("extract_image"), "Extract This Image...")
+        selected_action = menu.exec(global_position)
+        if selected_action in markup_actions:
+            self._apply_markup(markup_actions[selected_action])
+            return
+        if selected_action is not extract_action or image_match is None:
             return
 
         xref, extension = image_match
-        menu = QMenu(self)
-        extract_action = menu.addAction(self._icon("extract_image"), "Extract This Image...")
-        if menu.exec(global_position) != extract_action:
-            return
-
         suggested_name = f"{Path(session.path).stem}_page_{page_index + 1}_image.{extension}"
         selected, _ = QFileDialog.getSaveFileName(
             self,
@@ -1816,6 +1894,113 @@ class MainWindow(QMainWindow):
             return
 
         self.statusBar().showMessage(f"Extracted image to {destination.name}")
+
+    def _toggle_text_selection(self, enabled: bool) -> None:
+        for session in self._sessions_by_tab_index.values():
+            session.canvas.set_text_selection_enabled(enabled)
+        if enabled:
+            self.statusBar().showMessage("Text Select enabled · drag across text to select")
+        else:
+            self.statusBar().showMessage("Text Select disabled")
+
+    def _on_text_selection_requested(
+        self,
+        page_index: int,
+        x0: float,
+        y0: float,
+        x1: float,
+        y1: float,
+    ) -> None:
+        session = self._current_session()
+        if session is None:
+            return
+        try:
+            selection = self.viewer_service.select_text(
+                session.document,
+                page_index,
+                (x0, y0, x1, y1),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Text Selection Failed", str(exc))
+            return
+
+        session.text_selection = selection
+        if selection is None:
+            session.canvas.clear_text_selection()
+            self.properties_panel.clear_selection()
+            self.statusBar().showMessage("No text found in selection")
+        else:
+            session.current_page = page_index
+            session.canvas.set_text_selection(page_index, list(selection.rects))
+            self.toggle_properties_action.setChecked(True)
+            self.properties_panel.show_text_selection(page_index + 1, selection.text)
+            self.statusBar().showMessage(
+                f"Selected {len(selection.text.split())} word(s) on page {page_index + 1}"
+            )
+        self._sync_markup_actions(session)
+
+    def _apply_markup(self, kind: str) -> None:
+        session = self._current_session()
+        if session is None or session.text_selection is None:
+            self.statusBar().showMessage("Select text before adding markup")
+            return
+        selection = session.text_selection
+        colors = {
+            AnnotationService.HIGHLIGHT: (1.0, 0.82, 0.1),
+            AnnotationService.UNDERLINE: (0.1, 0.45, 0.9),
+            AnnotationService.STRIKEOUT: (0.85, 0.18, 0.18),
+        }
+        try:
+            session.command_history.execute(
+                AddMarkupAnnotationCommand(
+                    self.annotation_service,
+                    session.document,
+                    selection.page_index,
+                    kind,
+                    selection.rects,
+                    selection.text,
+                    colors[kind],
+                )
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Annotation Failed", f"Could not add markup:\n{exc}")
+            return
+
+        page_index = selection.page_index
+        self._clear_text_selection(session)
+        self._refresh_annotated_page(session, page_index)
+        self._set_session_dirty(session, session.command_history.is_dirty)
+        self.statusBar().showMessage(f"Added {kind} on page {page_index + 1}")
+
+    def _clear_text_selection(self, session: DocumentSession) -> None:
+        session.text_selection = None
+        session.canvas.clear_text_selection()
+        if session is self._current_session():
+            self.properties_panel.clear_selection()
+            self._sync_markup_actions(session)
+
+    def _refresh_annotated_page(self, session: DocumentSession, page_index: int) -> None:
+        session.page_cache.pop(page_index, None)
+        session.thumbnail_cache.pop(page_index, None)
+        session.canvas.clear_page_image(page_index)
+        session.render_queue = [index for index in session.render_queue if index != page_index]
+        session.render_queue.insert(0, page_index)
+        session.thumbnail_queue = [index for index in session.thumbnail_queue if index != page_index]
+        session.thumbnail_queue.insert(0, page_index)
+        if self.thumbnail_list.count() > page_index:
+            item = self.thumbnail_list.item(page_index)
+            if item is not None:
+                item.setIcon(self._thumbnail_progress_icon())
+                item.setData(self.THUMBNAIL_LOADING_ROLE, True)
+        self._sync_thumbnail_progress_timer(session)
+        if not self._background_render_timer.isActive():
+            self._background_render_timer.start()
+
+    def _sync_markup_actions(self, session: DocumentSession | None) -> None:
+        has_selection = session is not None and session.text_selection is not None
+        self.highlight_action.setEnabled(has_selection)
+        self.underline_action.setEnabled(has_selection)
+        self.strikeout_action.setEnabled(has_selection)
 
     def _run_extract_current_page(self, session: DocumentSession, save_to_current: bool) -> None:
         page_number = session.current_page + 1
@@ -2150,6 +2335,7 @@ class MainWindow(QMainWindow):
         self._load_toc_for_current_session()
         session = self._current_session()
         if session is not None:
+            session.canvas.set_text_selection_enabled(self.select_text_action.isChecked())
             session.canvas.set_display_mode(self._display_mode)
             session.canvas.set_night_mode(self._night_reading_mode)
             self._queue_render_for_current_session(center_page=session.current_page)
@@ -2158,6 +2344,14 @@ class MainWindow(QMainWindow):
             self._sync_document_actions(page_count=0)
         self._sync_search_ui(session)
         self._sync_undo_redo_actions(session)
+        self._sync_markup_actions(session)
+        if session is not None and session.text_selection is not None:
+            self.properties_panel.show_text_selection(
+                session.text_selection.page_index + 1,
+                session.text_selection.text,
+            )
+        else:
+            self.properties_panel.clear_selection()
 
     def _on_thumbnail_selected(self, page_index: int) -> None:
         if page_index < 0:
@@ -2777,6 +2971,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Redid {command.description}")
 
     def _refresh_after_page_command(self, session: DocumentSession, current_page: int) -> None:
+        self._clear_text_selection(session)
         session.page_count = session.document.page_count
         session.page_sizes = self.pdf_adapter.page_sizes(session.document)
         session.current_page = max(0, min(current_page, session.page_count - 1))
@@ -2825,4 +3020,6 @@ class MainWindow(QMainWindow):
                 marker = " *" if dirty else ""
                 self.tab_widget.setTabText(tab_index, f"{Path(session.path).name}{marker}")
                 break
-            self._sync_undo_redo_actions(session if session is self._current_session() else self._current_session())
+        self._sync_undo_redo_actions(
+            session if session is self._current_session() else self._current_session()
+        )
