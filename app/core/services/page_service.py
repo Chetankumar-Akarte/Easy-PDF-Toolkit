@@ -20,6 +20,29 @@ class PageService:
         """Reorder document pages using a list of current-state page indices in desired order."""
         document.select(new_order)
 
+    def insert_blank_pages(
+        self,
+        document,
+        insertion_index: int,
+        width: float,
+        height: float,
+        count: int = 1,
+    ) -> list[int]:
+        """Insert blank pages before ``insertion_index`` and return their final indices."""
+        if insertion_index < 0 or insertion_index > document.page_count:
+            raise ValueError("Insertion position is outside this document.")
+        if width <= 0 or height <= 0:
+            raise ValueError("Page dimensions must be greater than zero.")
+        if count <= 0:
+            raise ValueError("Page count must be greater than zero.")
+
+        inserted_indices: list[int] = []
+        for offset in range(count):
+            page_index = insertion_index + offset
+            document.new_page(pno=page_index, width=width, height=height)
+            inserted_indices.append(page_index)
+        return inserted_indices
+
     def parse_page_ranges(self, page_range_text: str, page_count: int) -> list[int]:
         """Parse 1-based ranges like `1,3,5-7` into 0-based unique page indices."""
         cleaned = (page_range_text or "").replace(" ", "")

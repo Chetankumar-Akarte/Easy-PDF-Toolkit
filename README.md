@@ -26,17 +26,17 @@ A desktop-first, fully offline PDF toolkit built with Python and PySide6. View, 
 - **Zoom Controls** — Zoom in / out / reset with customizable level, viewport anchor preserved on zoom
 - **Text Search** — Ribbon and `Ctrl+F` access, case-insensitive document search with debounced page-by-page scanning, all-match highlights, active-result focus, wraparound navigation, per-tab state, and no-results feedback
 - **File Operations** — Open, Save (incremental), Save As with overwrite confirmation, Close tab
-- **Page Tools** — Rotate left/right, delete page, reorder pages, and Split / Extract Pages workflow (current page, custom ranges, split by size)
+- **Page Tools** — Rotate left/right, delete, reorder, and insert 1–100 blank pages before/after the current page using current/A4/Letter/Legal sizes and portrait/landscape orientation; Split / Extract Pages workflow supports current page, custom ranges, and split by size
 - **Image Extraction** — Export all unique embedded images from the open PDF, or right-click a displayed image to extract it individually in its original detected format
 - **Recent Documents** — Welcome screen lists last 10 opened files sorted by most recently opened; click to reopen; missing files are cleaned up automatically; clear history action included
 - **Persistent Settings** — Window size, position, and last-used folder remembered between launches
-- **Keyboard Shortcuts** — `Ctrl+F` Find, `Enter` / `Shift+Enter` next/previous match, `Esc` close search, `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit
+- **Keyboard Shortcuts** — `Ctrl+F` Find, `Enter` / `Shift+Enter` next/previous match, `Esc` close search, `Ctrl+Shift+B` Insert Blank Pages, `Ctrl+O` Open, `Ctrl+S` Save, `Ctrl+Shift+S` Save As, `Ctrl+Shift+W` Close, `Ctrl+W` Fit Width, `Ctrl+R` Night Reading Mode, `Ctrl+X` Split / Extract Pages, `Ctrl+Q` Exit
 - **About Dialog** — Help > About with app metadata, runtime details, and repository link
 
 ### Roadmap
 
 - Rendering parity polish — final quality alignment with reference viewer in all zoom/night scenarios
-- Page operations — insert blank, merge
+- Page operations — merge PDFs
 - Annotations — text, highlight, underline, strikeout, sticky note, freehand draw
 - Overlay editing — add text boxes, images, shapes, stamps, signatures
 - Utilities — watermark, page numbering

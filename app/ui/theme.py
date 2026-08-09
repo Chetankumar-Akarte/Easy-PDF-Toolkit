@@ -207,6 +207,16 @@ QTabBar::tab:selected {{
     color: {theme.text_primary};
     border-bottom: 2px solid {theme.accent};
 }}
+QToolButton#documentTabCloseButton {{
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    padding: 2px;
+}}
+QToolButton#documentTabCloseButton:hover {{
+    background: {theme.bg_input};
+    border: 1px solid {theme.border};
+}}
 QWidget#actionBar {{
     background: {theme.bg_elevated};
     border-bottom: 1px solid {theme.border};

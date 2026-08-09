@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+import fitz
 
 from app.core.services.page_service import PageService
 
@@ -89,6 +90,47 @@ class TestParsePageRangesErrors:
     def test_zero_page_raises(self, svc: PageService) -> None:
         with pytest.raises(ValueError):
             svc.parse_page_ranges("0", 10)
+
+
+class TestInsertBlankPages:
+    def test_inserts_multiple_pages_at_position_with_requested_size(self, svc: PageService) -> None:
+        document = fitz.open()
+        try:
+            document.new_page(width=300, height=400).insert_text((20, 30), "first")
+            document.new_page(width=500, height=600).insert_text((20, 30), "second")
+
+            inserted = svc.insert_blank_pages(document, 1, width=612, height=792, count=2)
+
+            assert inserted == [1, 2]
+            assert document.page_count == 4
+            assert document[0].get_text().strip() == "first"
+            assert document[1].get_text() == ""
+            assert document[2].get_text() == ""
+            assert document[3].get_text().strip() == "second"
+            assert document[1].rect.width == pytest.approx(612)
+            assert document[1].rect.height == pytest.approx(792)
+        finally:
+            document.close()
+
+    @pytest.mark.parametrize(
+        ("insertion_index", "width", "height", "count"),
+        [(-1, 612, 792, 1), (2, 612, 792, 1), (0, 0, 792, 1), (0, 612, -1, 1), (0, 612, 792, 0)],
+    )
+    def test_rejects_invalid_insert_request(
+        self,
+        svc: PageService,
+        insertion_index: int,
+        width: float,
+        height: float,
+        count: int,
+    ) -> None:
+        document = fitz.open()
+        try:
+            document.new_page()
+            with pytest.raises(ValueError):
+                svc.insert_blank_pages(document, insertion_index, width, height, count)
+        finally:
+            document.close()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

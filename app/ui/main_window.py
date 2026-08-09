@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QSpinBox,
     QSplitter,
+    QTabBar,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
@@ -41,7 +42,7 @@ from app.core.services.viewer_service import SearchMatch, ViewerService
 from app.infra.pdf_engines.pymupdf_adapter import PyMuPDFAdapter
 from app.infra.storage.recent_files_repo import RecentFilesRepository
 from app.infra.storage.settings_repo import AppSettings, SettingsRepository
-from app.ui.dialogs import SplitExtractDialog
+from app.ui.dialogs import InsertBlankPageDialog, SplitExtractDialog
 from app.ui.panels.properties_panel import PropertiesPanel
 from app.ui.theme import ThemeColors, build_qss, get_theme, make_palette
 from app.ui.widgets.pdf_canvas import PdfCanvas
@@ -63,6 +64,7 @@ class DocumentSession:
     search_query: str = ""
     search_matches: list[SearchMatch] = field(default_factory=list)
     active_search_match: int = -1
+    is_dirty: bool = False
 
 
 class MainWindow(QMainWindow):
@@ -243,6 +245,7 @@ class MainWindow(QMainWindow):
 
         self.close_action = QAction(self._icon("close_file"), "Close", self)
         self.close_action.setShortcut(QKeySequence("Ctrl+Shift+W"))
+        self.close_action.setToolTip("Close current document (Ctrl+Shift+W)")
         self.close_action.triggered.connect(self._close_current_document)
 
         self.save_action = QAction(self._icon("save_file"), "Save", self)
@@ -271,6 +274,10 @@ class MainWindow(QMainWindow):
         self.delete_page_action = QAction(self._icon("delete_page"), "Delete Page", self)
         self.delete_page_action.setShortcut(QKeySequence("Ctrl+D"))
         self.delete_page_action.triggered.connect(self._delete_current_page)
+
+        self.insert_blank_page_action = QAction(self._icon("insert_blank_page"), "Insert Blank Pages...", self)
+        self.insert_blank_page_action.setShortcut(QKeySequence("Ctrl+Shift+B"))
+        self.insert_blank_page_action.triggered.connect(self._open_insert_blank_page_dialog)
 
         self.toggle_thumbnail_action = QAction(self._icon("thumbnail_panel"), "Thumbnails (Ctrl+T)", self)
         self.toggle_thumbnail_action.setCheckable(True)
@@ -347,6 +354,7 @@ class MainWindow(QMainWindow):
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.rotate_left_action)
         self.edit_menu.addAction(self.rotate_right_action)
+        self.edit_menu.addAction(self.insert_blank_page_action)
         self.edit_menu.addAction(self.delete_page_action)
         self.edit_menu.addSeparator()
         self.edit_menu.addAction(self.split_extract_action)
@@ -393,7 +401,12 @@ class MainWindow(QMainWindow):
         file_separator.setFixedHeight(24)
         action_bar_layout.addWidget(file_separator)
 
-        for action in [self.rotate_left_action, self.rotate_right_action, self.delete_page_action]:
+        for action in [
+            self.rotate_left_action,
+            self.rotate_right_action,
+            self.insert_blank_page_action,
+            self.delete_page_action,
+        ]:
             button = QToolButton(self.action_bar)
             button.setDefaultAction(action)
             button.setToolTip(action.text())
@@ -549,8 +562,17 @@ class MainWindow(QMainWindow):
 
         self.tab_widget = QTabWidget(reader_area)
         self.tab_widget.setObjectName("documentTabs")
-        self.tab_widget.setTabsClosable(True)
-        self.tab_widget.tabCloseRequested.connect(self._close_tab)
+        self.tab_widget.setTabsClosable(False)
+
+        self.document_close_button = QToolButton(self.tab_widget)
+        self.document_close_button.setObjectName("documentCloseButton")
+        self.document_close_button.setDefaultAction(self.close_action)
+        self.document_close_button.setAccessibleName("Close current document")
+        self._style_icon_button(self.document_close_button)
+        self.tab_widget.setCornerWidget(
+            self.document_close_button,
+            Qt.Corner.TopRightCorner,
+        )
 
         self.welcome_list = QListWidget(reader_area)
         self.welcome_list.setObjectName("welcomeList")
@@ -734,6 +756,7 @@ class MainWindow(QMainWindow):
         self.rotate_left_action.setEnabled(has_pages)
         self.rotate_right_action.setEnabled(has_pages)
         self.delete_page_action.setEnabled(has_pages)
+        self.insert_blank_page_action.setEnabled(has_pages)
         self.split_extract_action.setEnabled(has_pages)
         self.extract_images_action.setEnabled(has_pages)
         self.search_action.setEnabled(has_pages)
@@ -799,6 +822,7 @@ class MainWindow(QMainWindow):
         self.rotate_left_action.setIcon(self._icon("rotate_left"))
         self.rotate_right_action.setIcon(self._icon("rotate_right"))
         self.delete_page_action.setIcon(self._icon("delete_page"))
+        self.insert_blank_page_action.setIcon(self._icon("insert_blank_page"))
         self.toggle_thumbnail_action.setIcon(self._icon("thumbnail_panel"))
         self.split_extract_action.setIcon(self._icon("split_extract"))
         self.extract_images_action.setIcon(self._icon("extract_image"))
@@ -821,6 +845,7 @@ class MainWindow(QMainWindow):
             self.rotate_left_action,
             self.rotate_right_action,
             self.delete_page_action,
+            self.insert_blank_page_action,
             self.toggle_thumbnail_action,
             self.split_extract_action,
             self.extract_images_action,
@@ -857,6 +882,14 @@ class MainWindow(QMainWindow):
             self.search_previous_button.setIcon(self._icon("prev_page"))
             self.search_next_button.setIcon(self._icon("next_page"))
             self.search_close_button.setIcon(self._icon("close_file"))
+            if hasattr(self, "tab_widget"):
+                for tab_index in range(self.tab_widget.count()):
+                    close_button = self.tab_widget.tabBar().tabButton(
+                        tab_index,
+                        QTabBar.ButtonPosition.RightSide,
+                    )
+                    if isinstance(close_button, QToolButton):
+                        close_button.setIcon(self._icon("close_file"))
 
         self._refresh_night_badge_ui()
 
@@ -970,6 +1003,7 @@ class MainWindow(QMainWindow):
 
         tab_name = Path(selected_path).name
         tab_index = self.tab_widget.addTab(canvas, tab_name)
+        self._install_document_tab_close_button(tab_index, canvas)
         session = DocumentSession(
             path=selected_path,
             document=document,
@@ -1246,6 +1280,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No document to save")
             return
 
+        self._save_session(session)
+
+    def _save_session(self, session: DocumentSession) -> bool:
         try:
             saved_path = self.document_service.save(
                 document=session.document,
@@ -1253,13 +1290,15 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:
             QMessageBox.critical(self, "Save Failed", f"Could not save PDF:\n{exc}")
-            return
+            return False
 
         session.path = saved_path
+        self._set_session_dirty(session, False)
         self.recent_files_repo.add(saved_path)
         self._settings.last_open_dir = str(Path(saved_path).parent)
         self.settings_repo.save(self._settings)
         self.statusBar().showMessage(f"Saved {Path(saved_path).name}")
+        return True
 
     def _save_current_document_as(self) -> None:
         session = self._current_session()
@@ -1304,6 +1343,7 @@ class MainWindow(QMainWindow):
             return
 
         session.path = saved_path
+        self._set_session_dirty(session, False)
         tab_index = self.tab_widget.currentIndex()
         if tab_index >= 0:
             self.tab_widget.setTabText(tab_index, Path(saved_path).name)
@@ -1479,6 +1519,58 @@ class MainWindow(QMainWindow):
         if session is None:
             return
         self._delete_page(session.current_page)
+
+    def _open_insert_blank_page_dialog(self, *, reference_page: int | None = None) -> None:
+        session = self._current_session()
+        if session is None or session.page_count <= 0:
+            self.statusBar().showMessage("No document loaded")
+            return
+
+        if reference_page is None:
+            self.page_spin.interpretText()
+            page_index = self.page_spin.value() - 1
+            session.current_page = page_index
+        else:
+            page_index = reference_page
+        page_index = max(0, min(page_index, session.page_count - 1))
+        dialog = InsertBlankPageDialog(
+            current_page=page_index,
+            page_count=session.page_count,
+            current_page_size=session.page_sizes[page_index],
+            theme=self._theme,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        request = dialog.build_request()
+        try:
+            inserted_indices = self.page_service.insert_blank_pages(
+                session.document,
+                insertion_index=request.insertion_index,
+                width=request.width,
+                height=request.height,
+                count=request.count,
+            )
+            session.page_count = session.document.page_count
+            session.page_sizes = self.pdf_adapter.page_sizes(session.document)
+        except Exception as exc:
+            QMessageBox.critical(self, "Insert Blank Pages Failed", f"Could not insert pages:\n{exc}")
+            return
+
+        session.current_page = inserted_indices[0]
+        session.page_cache.clear()
+        session.thumbnail_cache.clear()
+        session.render_queue.clear()
+        session.thumbnail_queue = list(range(session.page_count))
+        self._set_session_dirty(session, True)
+        self._load_thumbnails_for_current_session()
+        self._rebuild_canvas_for_current_session()
+        self._restart_search_after_document_change(session)
+        page_word = "page" if request.count == 1 else "pages"
+        self.statusBar().showMessage(
+            f"Inserted {request.count} blank {page_word} at page {inserted_indices[0] + 1}"
+        )
 
     def _open_split_extract_dialog(self) -> None:
         session = self._current_session()
@@ -1759,8 +1851,30 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No document to close")
             return
 
-        self._close_tab(tab_index)
-        self.statusBar().showMessage("Document closed")
+        if self._close_tab(tab_index):
+            self.statusBar().showMessage("Document closed")
+
+    def _install_document_tab_close_button(self, tab_index: int, document_widget: QWidget) -> None:
+        close_button = QToolButton(self.tab_widget.tabBar())
+        close_button.setObjectName("documentTabCloseButton")
+        close_button.setIcon(self._icon("close_file"))
+        close_button.setIconSize(QSize(16, 16))
+        close_button.setFixedSize(22, 22)
+        close_button.setToolTip("Close document")
+        close_button.setAccessibleName("Close document")
+        close_button.clicked.connect(
+            lambda: self._close_document_widget(document_widget)
+        )
+        self.tab_widget.tabBar().setTabButton(
+            tab_index,
+            QTabBar.ButtonPosition.RightSide,
+            close_button,
+        )
+
+    def _close_document_widget(self, document_widget: QWidget) -> None:
+        tab_index = self.tab_widget.indexOf(document_widget)
+        if tab_index >= 0:
+            self._close_tab(tab_index)
 
     def _exit_application(self) -> None:
         self.close()
@@ -1850,7 +1964,11 @@ class MainWindow(QMainWindow):
             self.toggle_display_mode_action.setIcon(self._icon("single_page_mode"))
             self.toggle_display_mode_action.setToolTip("Switch to Continuous mode")
 
-    def _close_tab(self, index: int) -> None:
+    def _close_tab(self, index: int) -> bool:
+        session = self._sessions_by_tab_index.get(index)
+        if session is not None and not self._confirm_close_session(session):
+            return False
+
         session = self._sessions_by_tab_index.pop(index, None)
         if session is not None:
             if session is self._search_scan_session:
@@ -1880,6 +1998,26 @@ class MainWindow(QMainWindow):
 
         current_session = self._current_session()
         self._sync_document_actions(page_count=current_session.page_count if current_session is not None else 0)
+        return True
+
+    def _confirm_close_session(self, session: DocumentSession) -> bool:
+        if not session.is_dirty:
+            return True
+
+        answer = QMessageBox.warning(
+            self,
+            "Unsaved Changes",
+            f"Save changes to {Path(session.path).name} before closing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Save:
+            return self._save_session(session)
+        return True
 
     def _on_tab_changed(self, _index: int) -> None:
         self._search_debounce_timer.stop()
@@ -2373,6 +2511,11 @@ class MainWindow(QMainWindow):
         return str(Path.home())
 
     def closeEvent(self, event):  # noqa: N802
+        for session in list(self._sessions_by_tab_index.values()):
+            if not self._confirm_close_session(session):
+                event.ignore()
+                return
+
         geometry = self.geometry()
         self._settings.window_x = geometry.x()
         self._settings.window_y = geometry.y()
@@ -2394,12 +2537,17 @@ class MainWindow(QMainWindow):
         rotate_left_action.triggered.connect(lambda: self._rotate_page(page_index, -90))
         rotate_right_action = QAction(self._icon("rotate_right"), "Rotate Right (90° CW)", menu)
         rotate_right_action.triggered.connect(lambda: self._rotate_page(page_index, 90))
+        insert_action = QAction(self._icon("insert_blank_page"), "Insert Blank Pages...", menu)
+        insert_action.triggered.connect(
+            lambda: self._open_insert_blank_page_dialog(reference_page=page_index)
+        )
         delete_action = QAction(self._icon("delete_page"), "Delete Page", menu)
         delete_action.triggered.connect(lambda: self._delete_page(page_index))
 
         menu.addAction(rotate_left_action)
         menu.addAction(rotate_right_action)
         menu.addSeparator()
+        menu.addAction(insert_action)
         menu.addAction(delete_action)
         menu.exec(self.thumbnail_list.mapToGlobal(pos))
 
@@ -2438,6 +2586,7 @@ class MainWindow(QMainWindow):
         if not self._background_render_timer.isActive():
             self._background_render_timer.start()
 
+        self._set_session_dirty(session, True)
         self._restart_search_after_document_change(session)
 
         direction = "left" if degrees < 0 else "right"
@@ -2477,6 +2626,7 @@ class MainWindow(QMainWindow):
 
         self._load_thumbnails_for_current_session()
         self._rebuild_canvas_for_current_session()
+        self._set_session_dirty(session, True)
         self._restart_search_after_document_change(session)
         self.statusBar().showMessage(f"Page {page_index + 1} deleted | {session.page_count} pages remaining")
 
@@ -2517,6 +2667,7 @@ class MainWindow(QMainWindow):
             item.setIcon(self._thumbnail_progress_icon())
 
         self._rebuild_canvas_for_current_session()
+        self._set_session_dirty(session, True)
         self._restart_search_after_document_change(session)
         self.statusBar().showMessage(f"Pages reordered | {session.page_count} pages")
 
@@ -2531,3 +2682,11 @@ class MainWindow(QMainWindow):
         self._sync_page_controls(page_count=session.page_count, current_page=session.current_page)
         self._set_thumbnail_selection(session.current_page)
         self._queue_render_for_current_session(center_page=session.current_page)
+
+    def _set_session_dirty(self, session: DocumentSession, dirty: bool) -> None:
+        session.is_dirty = dirty
+        for tab_index in range(self.tab_widget.count()):
+            if self.tab_widget.widget(tab_index) is session.canvas:
+                marker = " *" if dirty else ""
+                self.tab_widget.setTabText(tab_index, f"{Path(session.path).name}{marker}")
+                break
