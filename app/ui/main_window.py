@@ -1857,6 +1857,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No document loaded")
             return
 
+        from app.ui.dialogs.extract_images_dialog import ExtractImagesDialog
+
+        dialog = ExtractImagesDialog(Path(session.path).stem, parent=self)
+        if dialog.exec() != ExtractImagesDialog.DialogCode.Accepted:
+            return
+        opts = dialog.result_options()
+        base_name = opts.base_name or Path(session.path).stem
+
         output_directory = QFileDialog.getExistingDirectory(
             self,
             "Select Folder for Extracted Images",
@@ -1869,7 +1877,10 @@ class MainWindow(QMainWindow):
             extracted = self.pdf_adapter.extract_images(
                 session.document,
                 output_directory,
-                Path(session.path).stem,
+                base_name,
+                page_label=opts.page_label,
+                image_label=opts.image_label,
+                target_format=opts.target_format,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Image Extraction Failed", f"Could not extract images:\n{exc}")

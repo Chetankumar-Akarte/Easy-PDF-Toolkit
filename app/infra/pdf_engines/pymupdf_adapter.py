@@ -33,7 +33,22 @@ class PyMuPDFAdapter:
             sizes.append((max(int(rect.width), 1), max(int(rect.height), 1)))
         return sizes
 
-    def extract_images(self, document, output_directory: str, source_stem: str) -> list[Path]:
+    _NATIVE_FORMATS = {"png", "webp"}
+
+    def extract_images(
+        self,
+        document,
+        output_directory: str,
+        source_stem: str,
+        *,
+        page_label: str = "page",
+        image_label: str = "image",
+        target_format: str | None = None,
+    ) -> list[Path]:
+        from io import BytesIO
+
+        from PIL import Image as PilImage
+
         destination = Path(output_directory).expanduser().resolve()
         destination.mkdir(parents=True, exist_ok=True)
 
@@ -47,14 +62,25 @@ class PyMuPDFAdapter:
                     continue
 
                 image = document.extract_image(xref)
-                extension = image.get("ext", "bin")
-                output_stem = f"{source_stem}_page_{page_index + 1}_image_{len(extracted) + 1}"
+                raw_ext = image.get("ext", "bin").lower()
+                needs_conversion = (
+                    target_format is not None and raw_ext not in self._NATIVE_FORMATS
+                )
+                extension = target_format if needs_conversion else raw_ext
+                output_stem = (
+                    f"{source_stem}_{page_label}_{page_index + 1}"
+                    f"_{image_label}_{len(extracted) + 1}"
+                )
                 output_path = destination / f"{output_stem}.{extension}"
                 duplicate_index = 2
                 while output_path.exists():
                     output_path = destination / f"{output_stem}_{duplicate_index}.{extension}"
                     duplicate_index += 1
-                output_path.write_bytes(image["image"])
+                if needs_conversion:
+                    pil_img = PilImage.open(BytesIO(image["image"])).convert("RGBA")
+                    pil_img.save(output_path, format=extension.upper())
+                else:
+                    output_path.write_bytes(image["image"])
                 extracted.append(output_path)
                 seen_xrefs.add(xref)
 
