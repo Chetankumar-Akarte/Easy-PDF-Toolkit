@@ -63,6 +63,76 @@ Signing/notarization is enforced as a fail-fast gate in release workflow.
 
 If required secrets are missing for a selected signed platform target, the workflow fails and release publication is blocked.
 
+### Secret Value Preparation (Windows and macOS)
+
+Use these commands locally to prepare the values for GitHub repository secrets.
+
+#### Windows Secrets
+
+- `WIN_CERT_PFX_BASE64`
+  - Value: base64 contents of your `.pfx` file on one line.
+  - macOS/Linux:
+
+```bash
+base64 -i /path/to/codesign.pfx | tr -d '\n'
+```
+
+  - Windows PowerShell:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\codesign.pfx"))
+```
+
+- `WIN_CERT_PASSWORD`
+  - Value: password used when exporting the `.pfx`.
+
+- `WIN_TIMESTAMP_URL`
+  - Value: RFC3161 timestamp server URL.
+  - Examples:
+    - `http://timestamp.digicert.com`
+    - `http://timestamp.sectigo.com`
+    - `http://rfc3161timestamp.globalsign.com/advanced`
+
+#### macOS Secrets
+
+- `MACOS_CERT_P12_BASE64`
+  - Value: base64 contents of your `.p12` certificate on one line.
+
+```bash
+base64 -i /path/to/developerid.p12 | tr -d '\n'
+```
+
+- `MACOS_CERT_PASSWORD`
+  - Value: password used when exporting the `.p12`.
+
+- `MACOS_TEAM_ID`
+  - Value: Apple Team ID (10 characters), for example `AB12C34DEF`.
+
+- `MACOS_SIGNING_IDENTITY`
+  - Value: exact identity string from this command:
+
+```bash
+security find-identity -v -p codesigning
+```
+
+  - Example value: `Developer ID Application: Your Name (TEAMID)`.
+
+- `MACOS_NOTARY_APPLE_ID`
+  - Value: Apple ID email used for notarization.
+
+- `MACOS_NOTARY_TEAM_ID`
+  - Value: usually same as `MACOS_TEAM_ID`.
+
+- `MACOS_NOTARY_APP_PASSWORD`
+  - Value: Apple app-specific password from Apple ID account.
+
+#### Safety Checklist
+
+- Keep base64 values as a single line (no extra spaces/newlines).
+- Make sure certificates include private keys.
+- Paste secret values, not file paths.
+- Never commit key/certificate exports into the repository.
+
 ### Linux Secret Preparation (Copy-Paste)
 
 ```bash
