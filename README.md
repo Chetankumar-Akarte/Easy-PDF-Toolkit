@@ -90,6 +90,27 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
+### Build Binaries (Manual Control)
+
+- GitHub Actions manual workflow: `.github/workflows/release.yml`
+- Workflow outputs:
+	- Portable: zip (Windows), tar.gz (macOS/Linux)
+	- Installers: MSI (Windows), DMG/PKG (macOS), AppImage (Linux)
+- The workflow runs packaged smoke tests before publishing artifacts.
+- Local scripts:
+	- macOS/Linux: `bash scripts/release/build_local.sh 1.0.0 both`
+	- Windows PowerShell: `./scripts/release/build_local.ps1 -Version 1.0.0 -ArtifactKind both`
+
+See `RELEASE.md` for full release details.
+
+### OCR Prerequisite
+
+OCR uses Tesseract as an external dependency and is not bundled in binaries.
+
+- Windows: install Tesseract and set path if needed (for example: `C:/Program Files/Tesseract-OCR/tesseract.exe`)
+- macOS: `brew install tesseract`
+- Linux: install `tesseract-ocr` via your package manager
+
 ### Repository
 
 - GitHub Repo: [https://github.com/Chetankumar-Akarte/Easy-PDF-Toolkit](https://github.com/Chetankumar-Akarte/Easy-PDF-Toolkit)

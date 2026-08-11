@@ -57,10 +57,12 @@ from app.core.services.viewer_service import SearchMatch, TextSelection, ViewerS
 from app.infra.pdf_engines.pymupdf_adapter import PyMuPDFAdapter
 from app.infra.storage.recent_files_repo import RecentFilesRepository
 from app.infra.storage.settings_repo import AppSettings, SettingsRepository
+from app.runtime_paths import resource_root
 from app.ui.dialogs import InsertBlankPageDialog, MergePdfDialog, SplitExtractDialog
 from app.ui.panels.properties_panel import PropertiesPanel
 from app.ui.theme import ThemeColors, build_qss, get_theme, make_palette
 from app.ui.widgets.pdf_canvas import PdfCanvas
+from app.__version__ import __version__
 
 
 @dataclass
@@ -86,7 +88,7 @@ class DocumentSession:
 
 
 class MainWindow(QMainWindow):
-    APP_VERSION = "1.0.0"
+    APP_VERSION = __version__
     REPOSITORY_URL = "https://github.com/Chetankumar-Akarte/Easy-PDF-Toolkit"
     THUMBNAIL_WIDTH = 110
     THUMBNAIL_HEIGHT = 150
@@ -147,7 +149,7 @@ class MainWindow(QMainWindow):
         if cached is not None:
             return cached
 
-        icon_path = Path(__file__).resolve().parents[1] / "resources" / "icons" / f"{icon_name}.svg"
+        icon_path = resource_root() / "icons" / f"{icon_name}.svg"
         svg_text = icon_path.read_text(encoding="utf-8")
         svg_text = svg_text.replace("currentColor", self._theme.icon)
 
@@ -168,7 +170,7 @@ class MainWindow(QMainWindow):
         if cached is not None:
             return cached
 
-        icon_path = Path(__file__).resolve().parents[1] / "resources" / "icons" / f"{icon_name}.svg"
+        icon_path = resource_root() / "icons" / f"{icon_name}.svg"
         svg_text = icon_path.read_text(encoding="utf-8")
         svg_text = svg_text.replace("currentColor", color)
 
@@ -198,7 +200,7 @@ class MainWindow(QMainWindow):
 
     def _build_window(self) -> None:
         self._load_app_font()
-        icon_path = Path(__file__).resolve().parents[1] / "resources" / "icons" / "tool_logo.svg"
+        icon_path = resource_root() / "icons" / "tool_logo.svg"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         self.setWindowTitle("Easy PDF Tool Kit")
@@ -207,7 +209,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
     def _load_app_font(self) -> None:
-        font_path = Path(__file__).resolve().parents[1] / "resources" / "fonts" / "JosefinSans-VariableFont_wght.ttf"
+        font_path = resource_root() / "fonts" / "JosefinSans-VariableFont_wght.ttf"
         if font_path.exists():
             QFontDatabase.addApplicationFont(str(font_path))
 
@@ -1210,21 +1212,29 @@ class MainWindow(QMainWindow):
         )
 
     def _open_document_by_path(self, selected: str) -> None:
+        self._try_open_document_by_path(selected, show_errors=True)
+
+    def open_document_for_smoke(self, selected: str) -> bool:
+        return self._try_open_document_by_path(selected, show_errors=False)
+
+    def _try_open_document_by_path(self, selected: str, *, show_errors: bool) -> bool:
         selected_path = str(Path(selected).resolve())
 
         # If the file is already open in a tab, switch to it instead of reopening.
         for idx, session in self._sessions_by_tab_index.items():
             if str(Path(session.path).resolve()) == selected_path:
                 self.tab_widget.setCurrentIndex(idx)
-                return
+                return True
 
         try:
             document = self.pdf_adapter.open_document(selected_path)
             page_count = self.pdf_adapter.page_count(document)
             page_sizes = self.pdf_adapter.page_sizes(document)
         except Exception as exc:
-            QMessageBox.critical(self, "Open Failed", f"Could not open PDF:\n{exc}")
-            return
+            if show_errors:
+                QMessageBox.critical(self, "Open Failed", f"Could not open PDF:\n{exc}")
+            self.statusBar().showMessage(f"Open failed: {exc}")
+            return False
 
         self.recent_files_repo.add(selected_path)
         self._settings.last_open_dir = str(Path(selected_path).parent)
@@ -1280,6 +1290,7 @@ class MainWindow(QMainWindow):
             self._resume_canvas_page_sync()
 
         self.statusBar().showMessage(f"Opened {tab_name} ({page_count} pages)")
+        return True
 
     def _refresh_welcome_recent_documents(self) -> None:
         self.welcome_list.clear()

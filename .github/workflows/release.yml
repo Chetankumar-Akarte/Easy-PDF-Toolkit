@@ -1,0 +1,297 @@
+name: Release Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (SemVer, without v prefix)
+        required: true
+        type: string
+      prerelease:
+        description: Mark GitHub release as pre-release
+        required: true
+        default: false
+        type: boolean
+      targets:
+        description: Platforms to build
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - windows-x64
+          - macos-x64
+          - macos-arm64
+          - linux-x64
+      artifacts:
+        description: Artifact kind
+        required: true
+        type: choice
+        default: both
+        options:
+          - portable
+          - installer
+          - both
+      publish:
+        description: Publish GitHub Release
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  APP_NAME: Easy-PDF-Toolkit
+
+jobs:
+  validate_inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version format
+        run: |
+          if ! [[ "${{ github.event.inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)?$ ]]; then
+            echo "Version must be SemVer-like (e.g. 1.2.3 or 1.2.3-rc1)."
+            exit 1
+          fi
+
+  build_and_package:
+    needs: [validate_inputs]
+    name: Build and Package (${{ matrix.id }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            os: windows-latest
+            arch: x64
+          - id: macos-x64
+            os: macos-13
+            arch: x64
+          - id: macos-arm64
+            os: macos-latest
+            arch: arm64
+          - id: linux-x64
+            os: ubuntu-latest
+            arch: x64
+
+    steps:
+      - name: Skip non-selected matrix target
+        if: ${{ github.event.inputs.targets != 'all' && github.event.inputs.targets != matrix.id }}
+        run: |
+          echo "Skipping target ${{ matrix.id }}"
+          exit 0
+
+      - name: Checkout
+        if: ${{ github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id }}
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        if: ${{ github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install app dependencies
+        if: ${{ github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Linux build dependencies
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'linux-x64' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2
+
+      - name: Install Windows installer tooling (WiX)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'windows-x64' && (github.event.inputs.artifacts == 'installer' || github.event.inputs.artifacts == 'both') }}
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.*
+          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Run tests
+        if: ${{ github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id }}
+        run: python -m pytest -q
+
+      - name: Build app bundle (PyInstaller)
+        if: ${{ github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id }}
+        run: pyinstaller --clean --noconfirm easy-pdf-toolkit.spec
+
+      - name: Prepare smoke fixture PDF
+        if: ${{ github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id }}
+        run: |
+          python - <<'PY'
+          import fitz
+          doc = fitz.open()
+          page = doc.new_page()
+          page.insert_text((72, 72), "Easy PDF Toolkit smoke test")
+          doc.save("smoke.pdf")
+          doc.close()
+          PY
+
+      - name: Smoke test packaged app (Windows)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'windows-x64' }}
+        shell: pwsh
+        run: |
+          dist\Easy-PDF-Toolkit\Easy-PDF-Toolkit.exe --smoke-open smoke.pdf
+
+      - name: Smoke test packaged app (macOS)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && startsWith(matrix.id, 'macos-') }}
+        run: |
+          dist/Easy-PDF-Toolkit.app/Contents/MacOS/Easy-PDF-Toolkit --smoke-open smoke.pdf
+
+      - name: Smoke test packaged app (Linux)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'linux-x64' }}
+        run: |
+          xvfb-run -a dist/Easy-PDF-Toolkit/Easy-PDF-Toolkit --smoke-open smoke.pdf
+
+      - name: Archive portable bundle (Windows)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && (github.event.inputs.artifacts == 'portable' || github.event.inputs.artifacts == 'both') && matrix.id == 'windows-x64' }}
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\Easy-PDF-Toolkit\* -DestinationPath dist\Easy-PDF-Toolkit-${{ github.event.inputs.version }}-${{ matrix.id }}.zip -Force
+
+      - name: Archive portable bundle (macOS/Linux)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && (github.event.inputs.artifacts == 'portable' || github.event.inputs.artifacts == 'both') && matrix.id != 'windows-x64' }}
+        run: |
+          tar -czf dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-${{ matrix.id }}.tar.gz -C dist $( [[ '${{ matrix.id }}' == linux-x64 ]] && echo Easy-PDF-Toolkit || echo Easy-PDF-Toolkit.app )
+
+      - name: Build MSI (Windows)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && (github.event.inputs.artifacts == 'installer' || github.event.inputs.artifacts == 'both') && matrix.id == 'windows-x64' }}
+        shell: pwsh
+        run: |
+          ./scripts/release/create_windows_installer.ps1 -Version "${{ github.event.inputs.version }}" -SourceDir "dist\Easy-PDF-Toolkit" -OutputDir "dist"
+
+      - name: Build macOS DMG/PKG
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && (github.event.inputs.artifacts == 'installer' || github.event.inputs.artifacts == 'both') && startsWith(matrix.id, 'macos-') }}
+        run: |
+          chmod +x scripts/release/create_macos_installers.sh
+          ./scripts/release/create_macos_installers.sh "${{ github.event.inputs.version }}" "dist/Easy-PDF-Toolkit.app" "dist"
+
+      - name: Build Linux AppImage
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && (github.event.inputs.artifacts == 'installer' || github.event.inputs.artifacts == 'both') && matrix.id == 'linux-x64' }}
+        run: |
+          chmod +x scripts/release/create_linux_appimage.sh
+          ./scripts/release/create_linux_appimage.sh "${{ github.event.inputs.version }}" "dist/Easy-PDF-Toolkit" "dist"
+
+      - name: Validate signing secrets (Windows)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'windows-x64' }}
+        shell: pwsh
+        env:
+          WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+          WIN_TIMESTAMP_URL: ${{ secrets.WIN_TIMESTAMP_URL }}
+        run: |
+          if (-not $env:WIN_CERT_PFX_BASE64 -or -not $env:WIN_CERT_PASSWORD -or -not $env:WIN_TIMESTAMP_URL) {
+            Write-Error "Missing Windows signing secrets."
+            exit 1
+          }
+
+      - name: Sign Windows artifacts
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'windows-x64' }}
+        shell: pwsh
+        env:
+          WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+          WIN_TIMESTAMP_URL: ${{ secrets.WIN_TIMESTAMP_URL }}
+        run: |
+          $pfxPath = "$env:RUNNER_TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WIN_CERT_PFX_BASE64))
+          $signtool = "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
+          & $signtool sign /f $pfxPath /p $env:WIN_CERT_PASSWORD /fd SHA256 /tr $env:WIN_TIMESTAMP_URL /td SHA256 "dist\Easy-PDF-Toolkit\Easy-PDF-Toolkit.exe"
+          if (Test-Path "dist\Easy-PDF-Toolkit-${{ github.event.inputs.version }}-windows-x64.msi") {
+            & $signtool sign /f $pfxPath /p $env:WIN_CERT_PASSWORD /fd SHA256 /tr $env:WIN_TIMESTAMP_URL /td SHA256 "dist\Easy-PDF-Toolkit-${{ github.event.inputs.version }}-windows-x64.msi"
+          }
+
+      - name: Validate signing/notarization secrets (macOS)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && startsWith(matrix.id, 'macos-') }}
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+        run: |
+          for var in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD MACOS_TEAM_ID MACOS_SIGNING_IDENTITY MACOS_NOTARY_APPLE_ID MACOS_NOTARY_TEAM_ID MACOS_NOTARY_APP_PASSWORD; do
+            if [[ -z "${!var}" ]]; then
+              echo "Missing macOS secret: $var"
+              exit 1
+            fi
+          done
+
+      - name: Sign and notarize macOS artifacts
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && startsWith(matrix.id, 'macos-') }}
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/codesign.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "temp" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "temp" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "temp" "$KEYCHAIN_PATH"
+
+          codesign --force --deep --options runtime --sign "$MACOS_SIGNING_IDENTITY" "dist/Easy-PDF-Toolkit.app"
+          if [[ -f "dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.pkg" ]]; then
+            productsign --sign "$MACOS_SIGNING_IDENTITY" "dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.pkg" "dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos-signed.pkg"
+            mv "dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos-signed.pkg" "dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.pkg"
+          fi
+
+          xcrun notarytool store-credentials "easy-pdf-notary" --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" --password "$MACOS_NOTARY_APP_PASSWORD"
+          xcrun notarytool submit "dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.dmg" --keychain-profile "easy-pdf-notary" --wait
+          xcrun stapler staple "dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.dmg"
+
+      - name: Upload artifacts
+        if: ${{ github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}-artifacts
+          path: |
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-${{ matrix.id }}.zip
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-${{ matrix.id }}.tar.gz
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-windows-x64.msi
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.dmg
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.pkg
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-linux-x64.AppImage
+          if-no-files-found: ignore
+
+  publish:
+    needs: [build_and_package]
+    if: ${{ github.event.inputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Build checksums
+        run: |
+          find release-assets -type f -maxdepth 4 -print0 | xargs -0 sha256sum > release-assets/SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: Easy PDF Toolkit v${{ github.event.inputs.version }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          files: |
+            release-assets/**
