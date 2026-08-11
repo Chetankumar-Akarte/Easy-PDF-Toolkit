@@ -96,6 +96,8 @@ python -m app.main
 - Workflow outputs:
 	- Portable: zip (Windows), tar.gz (macOS/Linux)
 	- Installers: MSI (Windows), DMG/PKG (macOS), AppImage (Linux)
+- Signing: Windows (Authenticode), macOS (codesign + notarization), Linux (GPG detached signatures)
+- Linux release also includes `linux-signing-public-key.asc` for end-user signature verification.
 - The workflow runs packaged smoke tests before publishing artifacts.
 - Local scripts:
 	- macOS/Linux: `bash scripts/release/build_local.sh 1.0.0 both`

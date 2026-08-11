@@ -2346,6 +2346,11 @@ class MainWindow(QMainWindow):
 
         self.page_service.extract_pages(session.document, [session.current_page], str(destination))
         self.statusBar().showMessage(f"Extracted current page to {destination.name}")
+        QMessageBox.information(
+            self,
+            "Extract Complete",
+            f"Extracted current page to:\n{destination}",
+        )
 
     def _run_extract_page_range(self, session: DocumentSession, page_range_text: str, save_to_current: bool) -> None:
         page_indices = self.page_service.parse_page_ranges(page_range_text, session.page_count)
@@ -2360,6 +2365,11 @@ class MainWindow(QMainWindow):
 
         self.page_service.extract_pages(session.document, page_indices, str(destination))
         self.statusBar().showMessage(f"Extracted {len(page_indices)} pages to {destination.name}")
+        QMessageBox.information(
+            self,
+            "Extract Complete",
+            f"Extracted {len(page_indices)} pages to:\n{destination}",
+        )
 
     def _run_split_by_range(
         self,
@@ -2403,6 +2413,11 @@ class MainWindow(QMainWindow):
             created.append(output_paths[idx])
 
         self.statusBar().showMessage(f"Split complete: {len(created)} files created in {output_dir}")
+        QMessageBox.information(
+            self,
+            "Split Complete",
+            f"Created {len(created)} files in:\n{output_dir}",
+        )
 
     def _resolve_single_extract_destination(
         self,
@@ -2451,7 +2466,7 @@ class MainWindow(QMainWindow):
         end_page: int,
         template: str,
     ) -> str:
-        return self._page_service.build_split_filename(
+        return self.page_service.build_split_filename(
             source_stem=source_path.stem,
             split_size=split_size,
             part_index=part_index,

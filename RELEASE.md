@@ -57,8 +57,60 @@ Signing/notarization is enforced as a fail-fast gate in release workflow.
   - `MACOS_NOTARY_APPLE_ID`
   - `MACOS_NOTARY_TEAM_ID`
   - `MACOS_NOTARY_APP_PASSWORD`
+- Linux
+  - `LINUX_GPG_PRIVATE_KEY` (ASCII-armored private key)
+  - `LINUX_GPG_PASSPHRASE`
 
 If required secrets are missing for a selected signed platform target, the workflow fails and release publication is blocked.
+
+### Linux Secret Preparation (Copy-Paste)
+
+```bash
+# 1) List your secret keys and pick KEY_ID for:
+#    Chetankumar Akarte <chetan.akarte@gmail.com>
+gpg --list-secret-keys --keyid-format LONG "Chetankumar Akarte <chetan.akarte@gmail.com>"
+
+# 2) Set your key id (replace with actual value from the command above)
+KEY_ID="YOUR_KEY_ID"
+
+# 3) Export private key (ASCII armored)
+gpg --armor --export-secret-keys "$KEY_ID" > private.key.asc
+
+# 4) Copy private key to clipboard
+# macOS:
+pbcopy < private.key.asc
+# Linux (xclip):
+xclip -selection clipboard < private.key.asc
+# Linux fallback (xsel):
+xsel --clipboard --input < private.key.asc
+
+# 5) Optional: export public key (for sharing/verification)
+gpg --armor --export "$KEY_ID" > public.key.asc
+
+# 6) Cleanup local private key export when done
+rm -f private.key.asc
+```
+
+- Secret mapping:
+  - `LINUX_GPG_PRIVATE_KEY`: contents of `private.key.asc`
+  - `LINUX_GPG_PASSPHRASE`: passphrase used for this GPG key
+- Warning: never commit exported private key files or passphrases to the repository.
+
+### Linux Signature Outputs
+
+- `Easy-PDF-Toolkit-<version>-linux-x64.tar.gz.asc`
+- `Easy-PDF-Toolkit-<version>-linux-x64.AppImage.asc`
+- `linux-signing-public-key.asc`
+
+Both are detached armored GPG signatures.
+
+### Linux Verification (End Users)
+
+```bash
+gpg --import linux-signing-public-key.asc
+gpg --verify Easy-PDF-Toolkit-<version>-linux-x64.AppImage.asc Easy-PDF-Toolkit-<version>-linux-x64.AppImage
+gpg --verify Easy-PDF-Toolkit-<version>-linux-x64.tar.gz.asc Easy-PDF-Toolkit-<version>-linux-x64.tar.gz
+```
 
 ## OCR Dependency Policy
 

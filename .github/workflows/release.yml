@@ -178,6 +178,53 @@ jobs:
           chmod +x scripts/release/create_linux_appimage.sh
           ./scripts/release/create_linux_appimage.sh "${{ github.event.inputs.version }}" "dist/Easy-PDF-Toolkit" "dist"
 
+      - name: Validate signing secrets (Linux)
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'linux-x64' }}
+        env:
+          LINUX_GPG_PRIVATE_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+        run: |
+          if [[ -z "$LINUX_GPG_PRIVATE_KEY" || -z "$LINUX_GPG_PASSPHRASE" ]]; then
+            echo "Missing Linux signing secrets."
+            exit 1
+          fi
+
+      - name: Sign Linux artifacts
+        if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'linux-x64' }}
+        env:
+          LINUX_GPG_PRIVATE_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+
+          echo "$LINUX_GPG_PRIVATE_KEY" | gpg --batch --import
+          KEY_FPR=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+
+          if [[ -z "$KEY_FPR" ]]; then
+            echo "Unable to resolve imported Linux signing key fingerprint."
+            exit 1
+          fi
+
+          artifacts=(
+            "dist/Easy-PDF-Toolkit-${VERSION}-linux-x64.tar.gz"
+            "dist/Easy-PDF-Toolkit-${VERSION}-linux-x64.AppImage"
+          )
+
+          for artifact in "${artifacts[@]}"; do
+            if [[ -f "$artifact" ]]; then
+              gpg --batch --yes --pinentry-mode loopback \
+                --passphrase "$LINUX_GPG_PASSPHRASE" \
+                --local-user "$KEY_FPR" \
+                --armor --detach-sign "$artifact"
+              gpg --verify "$artifact.asc" "$artifact"
+            fi
+          done
+
+          gpg --armor --export "$KEY_FPR" > dist/linux-signing-public-key.asc
+
       - name: Validate signing secrets (Windows)
         if: ${{ (github.event.inputs.targets == 'all' || github.event.inputs.targets == matrix.id) && matrix.id == 'windows-x64' }}
         shell: pwsh
@@ -268,6 +315,9 @@ jobs:
             dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.dmg
             dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-macos.pkg
             dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-linux-x64.AppImage
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-linux-x64.tar.gz.asc
+            dist/Easy-PDF-Toolkit-${{ github.event.inputs.version }}-linux-x64.AppImage.asc
+            dist/linux-signing-public-key.asc
           if-no-files-found: ignore
 
   publish:
