@@ -2,6 +2,99 @@
 
 This repository uses a manual GitHub Actions workflow to build platform binaries on demand.
 
+## Production Release (Beginner Guide)
+
+1. Get your signing files ready.
+- Windows: code-signing certificate exported as `.pfx` plus its password.
+- macOS: Developer ID certificate exported as `.p12` plus its password.
+- macOS notarization details: Apple ID, Team ID, app-specific password.
+- Linux (recommended): GPG private key and passphrase.
+
+2. Prepare base64 values on your Mac.
+- Windows `.pfx`:
+
+```bash
+base64 -i /path/to/codesign.pfx | tr -d '\n'
+```
+
+- macOS `.p12`:
+
+```bash
+base64 -i /path/to/developerid.p12 | tr -d '\n'
+```
+
+- macOS signing identity value:
+
+```bash
+security find-identity -v -p codesigning
+```
+
+3. Add secrets in GitHub.
+- Go to: `Repository -> Settings -> Secrets and variables -> Actions -> New repository secret`.
+- In `Name`, paste the exact secret name.
+- In `Secret`, paste the secret value text (not a file path).
+
+4. Add Windows secrets.
+- `WIN_CERT_PFX_BASE64`: one-line base64 text of `.pfx`.
+- `WIN_CERT_PASSWORD`: password of `.pfx`.
+- `WIN_TIMESTAMP_URL`: RFC3161 timestamp URL (example `http://timestamp.digicert.com`).
+
+5. Add macOS secrets.
+- `MACOS_CERT_P12_BASE64`: one-line base64 text of `.p12`.
+- `MACOS_CERT_PASSWORD`: password of `.p12`.
+- `MACOS_TEAM_ID`: Apple Team ID.
+- `MACOS_SIGNING_IDENTITY`: exact identity from `security find-identity -v -p codesigning`.
+- `MACOS_NOTARY_APPLE_ID`: Apple ID email.
+- `MACOS_NOTARY_TEAM_ID`: Apple notarization Team ID.
+- `MACOS_NOTARY_APP_PASSWORD`: Apple app-specific password.
+
+6. Add Linux secrets (recommended).
+- `LINUX_GPG_PRIVATE_KEY`: full armored private key text.
+- `LINUX_GPG_PASSPHRASE`: passphrase for that key.
+
+Secret mapping quick table:
+
+| Secret name | Example source |
+| --- | --- |
+| `WIN_CERT_PFX_BASE64` | Output of `base64 -i /path/to/codesign.pfx | tr -d '\n'` |
+| `WIN_CERT_PASSWORD` | Password you used while exporting the `.pfx` certificate |
+| `WIN_TIMESTAMP_URL` | CA timestamp URL, for example `http://timestamp.digicert.com` |
+| `MACOS_CERT_P12_BASE64` | Output of `base64 -i /path/to/developerid.p12 | tr -d '\n'` |
+| `MACOS_CERT_PASSWORD` | Password you used while exporting the `.p12` certificate |
+| `MACOS_TEAM_ID` | Apple Developer account portal (Membership / Team details) |
+| `MACOS_SIGNING_IDENTITY` | Output line from `security find-identity -v -p codesigning` |
+| `MACOS_NOTARY_APPLE_ID` | Apple ID email used for notarization |
+| `MACOS_NOTARY_TEAM_ID` | Apple Developer team ID used for notarization |
+| `MACOS_NOTARY_APP_PASSWORD` | Apple ID portal -> App-Specific Passwords |
+| `LINUX_GPG_PRIVATE_KEY` | Output of `gpg --armor --export-secret-keys "$KEY_ID"` |
+| `LINUX_GPG_PASSPHRASE` | Passphrase configured for the same GPG private key |
+
+7. Run a safe dry run first.
+- Go to: `Actions -> Release Binaries -> Run workflow`.
+- Inputs:
+- `version`: `1.4.0-rc1`
+- `prerelease`: `true`
+- `targets`: `windows-x64`
+- `artifacts`: `portable`
+- `publish`: `false`
+
+8. Run production release.
+- Go to: `Actions -> Release Binaries -> Run workflow`.
+- Inputs:
+- `version`: `1.4.0`
+- `prerelease`: `false`
+- `targets`: `all`
+- `artifacts`: `both`
+- `publish`: `true`
+
+9. Download your files.
+- If `publish=false`: from the workflow run `Artifacts` section.
+- If `publish=true`: from `GitHub Releases` assets.
+
+10. Trust warning note.
+- Signed builds remove invalid publisher/certificate issues.
+- Windows SmartScreen may still warn at first for new apps until reputation builds.
+
 ## Workflow
 
 - Workflow file: `.github/workflows/release.yml`
